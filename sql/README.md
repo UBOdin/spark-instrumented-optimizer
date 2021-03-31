@@ -1,5 +1,6 @@
 Spark SQL
 =========
+This is a custom instrumented version of sparl sql.
 
 This module provides support for executing relational queries expressed in either SQL or the DataFrame/Dataset API.
 
