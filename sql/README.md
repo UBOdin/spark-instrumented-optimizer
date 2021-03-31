@@ -1,6 +1,6 @@
 Spark SQL
 =========
-This is a custom instrumented version of sparl sql.
+This is a custom instrumented version of sparl sql. This will be used to log the performance of the Spark optimizer - Catalyst.
 
 This module provides support for executing relational queries expressed in either SQL or the DataFrame/Dataset API.
 
