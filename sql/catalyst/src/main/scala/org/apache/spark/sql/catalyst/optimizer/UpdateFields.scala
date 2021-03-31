@@ -21,6 +21,7 @@ import java.util.Locale
 
 import scala.collection.mutable
 
+import org.apache.spark.sql.catalyst.CustomLogger
 import org.apache.spark.sql.catalyst.expressions.{Expression, UpdateFields, WithField}
 import org.apache.spark.sql.catalyst.plans.logical.LogicalPlan
 import org.apache.spark.sql.catalyst.rules.Rule
@@ -42,6 +43,7 @@ object OptimizeUpdateFields extends Rule[LogicalPlan] {
     case UpdateFields(structExpr, fieldOps)
       if fieldOps.forall(_.isInstanceOf[WithField]) &&
         canOptimize(fieldOps.map(_.asInstanceOf[WithField].name)) =>
+      CustomLogger.logMatchTime("DARSHANA Match OptimizeUpdateFields", true) {
       val caseSensitive = conf.caseSensitiveAnalysis
 
       val withFields = fieldOps.map(_.asInstanceOf[WithField])
@@ -71,20 +73,27 @@ object OptimizeUpdateFields extends Rule[LogicalPlan] {
       }
 
       val newWithFields = newNames.reverse.zip(newValues.reverse).map(p => WithField(p._1, p._2))
-      UpdateFields(structExpr, newWithFields.toSeq)
+      UpdateFields(structExpr, newWithFields.toSeq)}
 
     case UpdateFields(UpdateFields(struct, fieldOps1), fieldOps2) =>
-      UpdateFields(struct, fieldOps1 ++ fieldOps2)
+      CustomLogger.logMatchTime("DARSHANA Match OptimizeUpdateFields", true) {
+      UpdateFields(struct, fieldOps1 ++ fieldOps2)}
   }
 
-  def apply(plan: LogicalPlan): LogicalPlan = plan resolveExpressions(optimizeUpdateFields)
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM OptimizeUpdateFields") {
+    plan resolveExpressions(optimizeUpdateFields)}
 }
 
 /**
  * Replaces [[UpdateFields]] expression with an evaluable expression.
  */
 object ReplaceUpdateFieldsExpression extends Rule[LogicalPlan] {
-  def apply(plan: LogicalPlan): LogicalPlan = plan transformAllExpressions {
-    case u: UpdateFields => u.evalExpr
-  }
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM ReplaceUpdateFieldsExpression") {
+    plan transformAllExpressions {
+    case u: UpdateFields =>
+      CustomLogger.logMatchTime("DARSHANA Match ReplaceUpdateFieldsExpression", true) {
+      u.evalExpr}
+  }}
 }

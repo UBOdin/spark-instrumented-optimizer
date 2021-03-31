@@ -20,6 +20,7 @@ package org.apache.spark.sql.catalyst.optimizer
 import scala.collection.immutable.HashSet
 import scala.collection.mutable.{ArrayBuffer, Stack}
 
+import org.apache.spark.sql.catalyst.CustomLogger
 import org.apache.spark.sql.catalyst.analysis._
 import org.apache.spark.sql.catalyst.expressions.{BinaryExpression, MultiLikeBase, _}
 import org.apache.spark.sql.catalyst.expressions.Literal.{FalseLiteral, TrueLiteral}
@@ -49,8 +50,12 @@ object ConstantFolding extends Rule[LogicalPlan] {
     case _ => false
   }
 
-  def apply(plan: LogicalPlan): LogicalPlan = plan transform {
-    case q: LogicalPlan => q transformExpressionsDown {
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM ConstantFolding") {
+    plan transform {
+    case q: LogicalPlan =>
+      CustomLogger.logMatchTime("DARSHANA Match ConstantFolding", true) {
+      q transformExpressionsDown {
       // Skip redundant folding of literals. This rule is technically not necessary. Placing this
       // here avoids running the next rule for Literal values, which would create a new Literal
       // object and running eval unnecessarily.
@@ -63,8 +68,8 @@ object ConstantFolding extends Rule[LogicalPlan] {
 
       // Fold expressions that are foldable.
       case e if e.foldable => Literal.create(e.eval(EmptyRow), e.dataType)
-    }
-  }
+    }}
+  }}
 }
 
 /**
@@ -82,15 +87,18 @@ object ConstantFolding extends Rule[LogicalPlan] {
  *   in the AND node.
  */
 object ConstantPropagation extends Rule[LogicalPlan] with PredicateHelper {
-  def apply(plan: LogicalPlan): LogicalPlan = plan transform {
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM ConstantPropagation") {
+    plan transform {
     case f: Filter =>
+      CustomLogger.logMatchTime("DARSHANA Match ConstantPropagation", true) {
       val (newCondition, _) = traverse(f.condition, replaceChildren = true, nullIsFalse = true)
       if (newCondition.isDefined) {
         f.copy(condition = newCondition.get)
       } else {
         f
-      }
-  }
+      }}
+  }}
 
   type EqualityPredicates = Seq[((AttributeReference, Literal), BinaryComparison)]
 
@@ -209,12 +217,15 @@ object ReorderAssociativeOperator extends Rule[LogicalPlan] {
     case _ => ExpressionSet(Seq.empty)
   }
 
-  def apply(plan: LogicalPlan): LogicalPlan = plan transform {
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM ReorderAssociativeOperator") {
+    plan transform {
     case q: LogicalPlan =>
       // We have to respect aggregate expressions which exists in grouping expressions when plan
       // is an Aggregate operator, otherwise the optimized expression could not be derived from
       // grouping expressions.
       // TODO: do not reorder consecutive `Add`s or `Multiply`s with different `failOnError` flags
+      CustomLogger.logMatchTime("DARSHANA Match ReorderAssociativeOperator", true) {
       val groupingExpressionSet = collectGroupingExpressions(q)
       q transformExpressionsDown {
       case a @ Add(_, _, f) if a.deterministic && a.dataType.isInstanceOf[IntegralType] =>
@@ -235,8 +246,8 @@ object ReorderAssociativeOperator extends Rule[LogicalPlan] {
         } else {
           m
         }
-    }
-  }
+    }}
+  }}
 }
 
 
@@ -249,8 +260,12 @@ object ReorderAssociativeOperator extends Rule[LogicalPlan] {
  *    [[InSet (value, HashSet[Literal])]] which is much faster.
  */
 object OptimizeIn extends Rule[LogicalPlan] {
-  def apply(plan: LogicalPlan): LogicalPlan = plan transform {
-    case q: LogicalPlan => q transformExpressionsDown {
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM OptimizeIn") {
+    plan transform {
+    case q: LogicalPlan =>
+      CustomLogger.logMatchTime("DARSHANA Match OptimizeIn", true) {
+      q transformExpressionsDown {
       case In(v, list) if list.isEmpty =>
         // When v is not nullable, the following expression will be optimized
         // to FalseLiteral which is tested in OptimizeInSuite.scala
@@ -271,8 +286,8 @@ object OptimizeIn extends Rule[LogicalPlan] {
         } else { // newList.length == list.length && newList.length > 1
           expr
         }
-    }
-  }
+    }}
+  }}
 }
 
 
@@ -284,8 +299,12 @@ object OptimizeIn extends Rule[LogicalPlan] {
  * 4. Removes `Not` operator.
  */
 object BooleanSimplification extends Rule[LogicalPlan] with PredicateHelper {
-  def apply(plan: LogicalPlan): LogicalPlan = plan transform {
-    case q: LogicalPlan => q transformExpressionsUp {
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM BooleanSimplification") {
+    plan transform {
+    case q: LogicalPlan =>
+      CustomLogger.logMatchTime("DARSHANA Match BooleanSimplification", true) {
+      q transformExpressionsUp {
       case TrueLiteral And e => e
       case e And TrueLiteral => e
       case FalseLiteral Or e => e
@@ -433,8 +452,8 @@ object BooleanSimplification extends Rule[LogicalPlan] with PredicateHelper {
 
       case Not(IsNull(e)) => IsNotNull(e)
       case Not(IsNotNull(e)) => IsNull(e)
-    }
-  }
+    }}
+  }}
 }
 
 
@@ -458,8 +477,11 @@ object SimplifyBinaryComparison
     }
   }
 
-  def apply(plan: LogicalPlan): LogicalPlan = plan transform {
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM SimplifyBinaryComparison") {
+    plan transform {
     case l: LogicalPlan =>
+      CustomLogger.logMatchTime("DARSHANA Match SimplifyBinaryComparison", true) {
       lazy val notNullExpressions = ExpressionSet(l match {
         case Filter(fc, _) =>
           splitConjunctivePredicates(fc).collect {
@@ -479,8 +501,8 @@ object SimplifyBinaryComparison
         // False with inequality
         case a GreaterThan b if canSimplifyComparison(a, b, notNullExpressions) => FalseLiteral
         case a LessThan b if canSimplifyComparison(a, b, notNullExpressions) => FalseLiteral
-      }
-  }
+      }}
+  }}
 }
 
 
@@ -494,8 +516,12 @@ object SimplifyConditionals extends Rule[LogicalPlan] with PredicateHelper {
     case _ => false
   }
 
-  def apply(plan: LogicalPlan): LogicalPlan = plan transform {
-    case q: LogicalPlan => q transformExpressionsUp {
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM SimplifyConditionals") {
+    plan transform {
+    case q: LogicalPlan =>
+      CustomLogger.logMatchTime("DARSHANA Match SimplifyConditionals", true) {
+      q transformExpressionsUp {
       case If(TrueLiteral, trueValue, _) => trueValue
       case If(FalseLiteral, _, falseValue) => falseValue
       case If(Literal(null, _), _, falseValue) => falseValue
@@ -557,8 +583,8 @@ object SimplifyConditionals extends Rule[LogicalPlan] with PredicateHelper {
         } else {
           e.copy(branches = branches.take(i).map(branch => (branch._1, elseValue)))
         }
-    }
-  }
+    }}
+  }}
 }
 
 
@@ -593,14 +619,17 @@ object PushFoldableIntoBranches extends Rule[LogicalPlan] with PredicateHelper {
     case _: BinaryComparison | _: StringPredicate | _: StringRegexExpression => true
     case _: BinaryArithmetic => true
     case _: BinaryMathExpression => true
-    case _: AddMonths | _: DateAdd | _: DateAddInterval | _: DateDiff | _: DateSub |
-         _: DateAddYMInterval | _: TimestampAddYMInterval | _: TimeAdd => true
+    case _: AddMonths | _: DateAdd | _: DateAddInterval | _: DateDiff | _: DateSub => true
     case _: FindInSet | _: RoundBase => true
     case _ => false
   }
 
-  def apply(plan: LogicalPlan): LogicalPlan = plan transform {
-    case q: LogicalPlan => q transformExpressionsUp {
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM PushFoldableIntoBranches") {
+    plan transform {
+    case q: LogicalPlan =>
+      CustomLogger.logMatchTime("DARSHANA Match PushFoldableIntoBranches", true) {
+      q transformExpressionsUp {
       case u @ UnaryExpression(i @ If(_, trueValue, falseValue))
           if supportedUnaryExpression(u) && atMostOneUnfoldable(Seq(trueValue, falseValue)) =>
         i.copy(
@@ -640,8 +669,8 @@ object PushFoldableIntoBranches extends Rule[LogicalPlan] with PredicateHelper {
         c.copy(
           branches.map(e => e.copy(_2 = b.withNewChildren(Array(left, e._2)))),
           elseValue.map(e => b.withNewChildren(Array(left, e))))
-    }
-  }
+    }}
+  }}
 }
 
 
@@ -692,9 +721,7 @@ object LikeSimplification extends Rule[LogicalPlan] {
   private def simplifyMultiLike(
       child: Expression, patterns: Seq[UTF8String], multi: MultiLikeBase): Expression = {
     val (remainPatternMap, replacementMap) =
-      patterns.map { p =>
-        p -> Option(p).flatMap(p => simplifyLike(child, p.toString))
-      }.partition(_._2.isEmpty)
+      patterns.map { p => p -> simplifyLike(child, p.toString)}.partition(_._2.isEmpty)
     val remainPatterns = remainPatternMap.map(_._1)
     val replacements = replacementMap.map(_._2.get)
     if (replacements.isEmpty) {
@@ -711,19 +738,30 @@ object LikeSimplification extends Rule[LogicalPlan] {
     }
   }
 
-  def apply(plan: LogicalPlan): LogicalPlan = plan transformAllExpressions {
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM LikeSimplification") {
+    plan transformAllExpressions {
     case l @ Like(input, Literal(pattern, StringType), escapeChar) =>
+      CustomLogger.logMatchTime("DARSHANA: Match 1 LikeSimplification", true) {
       if (pattern == null) {
         // If pattern is null, return null value directly, since "col like null" == null.
         Literal(null, BooleanType)
       } else {
         simplifyLike(input, pattern.toString, escapeChar).getOrElse(l)
-      }
-    case l @ LikeAll(child, patterns) => simplifyMultiLike(child, patterns, l)
-    case l @ NotLikeAll(child, patterns) => simplifyMultiLike(child, patterns, l)
-    case l @ LikeAny(child, patterns) => simplifyMultiLike(child, patterns, l)
-    case l @ NotLikeAny(child, patterns) => simplifyMultiLike(child, patterns, l)
-  }
+      }}
+    case l @ LikeAll(child, patterns) =>
+      CustomLogger.logMatchTime("DARSHANA: Match 2 LikeSimplification", true) {
+        simplifyMultiLike(child, patterns, l)}
+    case l @ NotLikeAll(child, patterns) =>
+      CustomLogger.logMatchTime("DARSHANA: Match 3 LikeSimplification", true) {
+        simplifyMultiLike(child, patterns, l)}
+    case l @ LikeAny(child, patterns) =>
+      CustomLogger.logMatchTime("DARSHANA: Match 4 LikeSimplification", true) {
+        simplifyMultiLike(child, patterns, l)}
+    case l @ NotLikeAny(child, patterns) =>
+      CustomLogger.logMatchTime("DARSHANA: Match 5 LikeSimplification", true) {
+        simplifyMultiLike(child, patterns, l)}
+  }}
 }
 
 
@@ -738,8 +776,12 @@ object NullPropagation extends Rule[LogicalPlan] {
     case _ => false
   }
 
-  def apply(plan: LogicalPlan): LogicalPlan = plan transform {
-    case q: LogicalPlan => q transformExpressionsUp {
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM NullPropagation") {
+    plan transform {
+    case q: LogicalPlan =>
+     CustomLogger.logMatchTime("DARSHANA Match NullPropagation", true) {
+        q transformExpressionsUp {
       case e @ WindowExpression(Cast(Literal(0L, _), _, _), _) =>
         Cast(Literal(0L), e.dataType, Option(conf.sessionLocalTimeZone))
       case e @ AggregateExpression(Count(exprs), _, _, _, _) if exprs.forall(isNullLiteral) =>
@@ -748,11 +790,15 @@ object NullPropagation extends Rule[LogicalPlan] {
         // This rule should be only triggered when isDistinct field is false.
         ae.copy(aggregateFunction = Count(Literal(1)))
 
-      case IsNull(c) if !c.nullable => Literal.create(false, BooleanType)
-      case IsNotNull(c) if !c.nullable => Literal.create(true, BooleanType)
+      case IsNull(c) if !c.nullable =>
+          Literal.create(false, BooleanType)
+      case IsNotNull(c) if !c.nullable =>
+          Literal.create(true, BooleanType)
 
-      case EqualNullSafe(Literal(null, _), r) => IsNull(r)
-      case EqualNullSafe(l, Literal(null, _)) => IsNull(l)
+      case EqualNullSafe(Literal(null, _), r) =>
+          IsNull(r)
+      case EqualNullSafe(l, Literal(null, _)) =>
+          IsNull(l)
 
       case AssertNotNull(c, _) if !c.nullable => c
 
@@ -768,15 +814,17 @@ object NullPropagation extends Rule[LogicalPlan] {
         }
 
       // If the value expression is NULL then transform the In expression to null literal.
-      case In(Literal(null, _), _) => Literal.create(null, BooleanType)
-      case InSubquery(Seq(Literal(null, _)), _) => Literal.create(null, BooleanType)
+      case In(Literal(null, _), _) =>
+          Literal.create(null, BooleanType)
+      case InSubquery(Seq(Literal(null, _)), _) =>
+          Literal.create(null, BooleanType)
 
       // Non-leaf NullIntolerant expressions will return null, if at least one of its children is
       // a null literal.
       case e: NullIntolerant if e.children.exists(isNullLiteral) =>
         Literal.create(null, e.dataType)
-    }
-  }
+    }}
+  }}
 }
 
 
@@ -795,28 +843,32 @@ object NullPropagation extends Rule[LogicalPlan] {
  */
 object FoldablePropagation extends Rule[LogicalPlan] {
   def apply(plan: LogicalPlan): LogicalPlan = {
-    CleanupAliases(propagateFoldables(plan)._1)
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM FoldablePropagation") {
+      CleanupAliases(propagateFoldables(plan)._1)}
   }
 
   private def propagateFoldables(plan: LogicalPlan): (LogicalPlan, AttributeMap[Alias]) = {
     plan match {
       case p: Project =>
+        CustomLogger.logMatchTime("DARSHANA Match FoldablePropagation", true) {
         val (newChild, foldableMap) = propagateFoldables(p.child)
         val newProject =
           replaceFoldable(p.withNewChildren(Seq(newChild)).asInstanceOf[Project], foldableMap)
         val newFoldableMap = collectFoldables(newProject.projectList)
-        (newProject, newFoldableMap)
+        (newProject, newFoldableMap)}
 
       case a: Aggregate =>
+        CustomLogger.logMatchTime("DARSHANA Match FoldablePropagation", true) {
         val (newChild, foldableMap) = propagateFoldables(a.child)
         val newAggregate =
           replaceFoldable(a.withNewChildren(Seq(newChild)).asInstanceOf[Aggregate], foldableMap)
         val newFoldableMap = collectFoldables(newAggregate.aggregateExpressions)
-        (newAggregate, newFoldableMap)
+        (newAggregate, newFoldableMap)}
 
       // We can not replace the attributes in `Expand.output`. If there are other non-leaf
       // operators that have the `output` field, we should put them here too.
       case e: Expand =>
+        CustomLogger.logMatchTime("DARSHANA Match FoldablePropagation", true) {
         val (newChild, foldableMap) = propagateFoldables(e.child)
         val expandWithNewChildren = e.withNewChildren(Seq(newChild)).asInstanceOf[Expand]
         val newExpand = if (foldableMap.isEmpty) {
@@ -831,12 +883,13 @@ object FoldablePropagation extends Rule[LogicalPlan] {
             expandWithNewChildren.copy(projections = newProjections)
           }
         }
-        (newExpand, foldableMap)
+        (newExpand, foldableMap)}
 
       case u: UnaryNode if canPropagateFoldables(u) =>
+        CustomLogger.logMatchTime("DARSHANA Match FoldablePropagation", true) {
         val (newChild, foldableMap) = propagateFoldables(u.child)
         val newU = replaceFoldable(u.withNewChildren(Seq(newChild)), foldableMap)
-        (newU, foldableMap)
+        (newU, foldableMap)}
 
       // Join derives the output attributes from its child while they are actually not the
       // same attributes. For example, the output of outer join is not always picked from its
@@ -845,6 +898,7 @@ object FoldablePropagation extends Rule[LogicalPlan] {
       // TODO(cloud-fan): It seems more reasonable to use new attributes as the output attributes
       // of outer join.
       case j: Join =>
+        CustomLogger.logMatchTime("DARSHANA Match FoldablePropagation", true) {
         val (newChildren, foldableMaps) = j.children.map(propagateFoldables).unzip
         val foldableMap = AttributeMap(
           foldableMaps.foldLeft(Iterable.empty[(Attribute, Alias)])(_ ++ _.baseMap.values).toSeq)
@@ -860,13 +914,14 @@ object FoldablePropagation extends Rule[LogicalPlan] {
         val newFoldableMap = AttributeMap(foldableMap.baseMap.values.filterNot {
           case (attr, _) => missDerivedAttrsSet.contains(attr)
         }.toSeq)
-        (newJoin, newFoldableMap)
+        (newJoin, newFoldableMap)}
 
       // For other plans, they are not safe to apply foldable propagation, and they should not
       // propagate foldable expressions from children.
       case o =>
+        CustomLogger.logMatchTime("DARSHANA Match FoldablePropagation", true) {
         val newOther = o.mapChildren(propagateFoldables(_)._1)
-        (newOther, AttributeMap.empty)
+        (newOther, AttributeMap.empty)}
     }
   }
 
@@ -915,15 +970,20 @@ object FoldablePropagation extends Rule[LogicalPlan] {
  * Removes [[Cast Casts]] that are unnecessary because the input is already the correct type.
  */
 object SimplifyCasts extends Rule[LogicalPlan] {
-  def apply(plan: LogicalPlan): LogicalPlan = plan transformAllExpressions {
-    case Cast(e, dataType, _) if e.dataType == dataType => e
-    case c @ Cast(e, dataType, _) => (e.dataType, dataType) match {
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA: TRANSFORM SimplifyCasts") {
+    plan transformAllExpressions {
+    case Cast(e, dataType, _) if e.dataType == dataType =>
+     CustomLogger.logMatchTime("DARSHANA: Match 1 SimplifyCasts", false) {e}
+    case c @ Cast(e, dataType, _) =>
+      CustomLogger.logMatchTime("DARSHANA: Match 2 SimplifyCasts", false) {
+      (e.dataType, dataType) match {
       case (ArrayType(from, false), ArrayType(to, true)) if from == to => e
       case (MapType(fromKey, fromValue, false), MapType(toKey, toValue, true))
         if fromKey == toKey && fromValue == toValue => e
       case _ => c
-      }
-  }
+      }}
+  }}
 }
 
 
@@ -931,9 +991,13 @@ object SimplifyCasts extends Rule[LogicalPlan] {
  * Removes nodes that are not necessary.
  */
 object RemoveDispensableExpressions extends Rule[LogicalPlan] {
-  def apply(plan: LogicalPlan): LogicalPlan = plan transformAllExpressions {
-    case UnaryPositive(child) => child
-  }
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM RemoveDispensableExpressions") {
+    plan transformAllExpressions {
+    case UnaryPositive(child) =>
+      CustomLogger.logMatchTime("DARSHANA Match RemoveDispensableExpressions", true) {
+      child}
+  }}
 }
 
 
@@ -942,14 +1006,18 @@ object RemoveDispensableExpressions extends Rule[LogicalPlan] {
  * the inner conversion is overwritten by the outer one.
  */
 object SimplifyCaseConversionExpressions extends Rule[LogicalPlan] {
-  def apply(plan: LogicalPlan): LogicalPlan = plan transform {
-    case q: LogicalPlan => q transformExpressionsUp {
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM SimplifyCaseConversionExpressions") {
+    plan transform {
+    case q: LogicalPlan =>
+      CustomLogger.logMatchTime("DARSHANA TRANSFORM SimplifyCaseConversionExpressions", true) {
+      q transformExpressionsUp {
       case Upper(Upper(child)) => Upper(child)
       case Upper(Lower(child)) => Upper(child)
       case Lower(Upper(child)) => Lower(child)
       case Lower(Lower(child)) => Lower(child)
-    }
-  }
+    }}
+  }}
 }
 
 
@@ -984,8 +1052,11 @@ object CombineConcats extends Rule[LogicalPlan] {
     case _ => false
   }
 
-  def apply(plan: LogicalPlan): LogicalPlan = plan.transformExpressionsDown {
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM CombineConcats") {
+    plan.transformExpressionsDown {
     case concat: Concat if hasNestedConcats(concat) =>
-      flattenConcats(concat)
-  }
+      CustomLogger.logMatchTime("DARSHANA Match CombineConcats", true) {
+      flattenConcats(concat)}
+  }}
 }

@@ -17,6 +17,7 @@
 
 package org.apache.spark.sql.catalyst.analysis
 
+import org.apache.spark.sql.catalyst.CustomLogger
 import org.apache.spark.sql.catalyst.expressions.Attribute
 import org.apache.spark.sql.catalyst.plans.logical.{LeafNode, LogicalPlan}
 import org.apache.spark.sql.catalyst.rules.Rule
@@ -32,12 +33,17 @@ import org.apache.spark.sql.catalyst.rules.Rule
  */
 object UpdateAttributeNullability extends Rule[LogicalPlan] {
 
-  def apply(plan: LogicalPlan): LogicalPlan = plan resolveOperatorsUp {
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM UpdateAttributeNullability") {
+    plan resolveOperatorsUp {
     // Skip unresolved nodes.
-    case p if !p.resolved => p
+    case p if !p.resolved =>
+      CustomLogger.logMatchTime("DARSHANA Match UpdateAttributeNullability", true) {p}
     // Skip leaf node, as it has no child and no need to update nullability.
-    case p: LeafNode => p
+    case p: LeafNode =>
+      CustomLogger.logMatchTime("DARSHANA Match UpdateAttributeNullability", true) {p}
     case p: LogicalPlan if p.childrenResolved =>
+      CustomLogger.logMatchTime("DARSHANA Match UpdateAttributeNullability", true) {
       val nullabilities = p.children.flatMap(c => c.output).groupBy(_.exprId).map {
         // If there are multiple Attributes having the same ExprId, we need to resolve
         // the conflict of nullable field. We do not really expect this to happen.
@@ -49,6 +55,6 @@ object UpdateAttributeNullability extends Rule[LogicalPlan] {
       p.transformExpressions {
         case attr: Attribute if nullabilities.contains(attr.exprId) =>
           attr.withNullability(nullabilities(attr.exprId))
-      }
-  }
+      }}
+  }}
 }

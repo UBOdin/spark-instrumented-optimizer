@@ -17,6 +17,7 @@
 
 package org.apache.spark.sql.catalyst.optimizer
 
+import org.apache.spark.sql.catalyst.CustomLogger
 import org.apache.spark.sql.catalyst.expressions.{And, CaseWhen, Expression, If, Literal, Not, Or}
 import org.apache.spark.sql.catalyst.expressions.Literal.{FalseLiteral, TrueLiteral}
 import org.apache.spark.sql.catalyst.plans.logical._
@@ -43,12 +44,22 @@ import org.apache.spark.sql.types.BooleanType
  */
 object SimplifyConditionalsInPredicate extends Rule[LogicalPlan] {
 
-  def apply(plan: LogicalPlan): LogicalPlan = plan transform {
-    case f @ Filter(cond, _) => f.copy(condition = simplifyConditional(cond))
-    case j @ Join(_, _, _, Some(cond), _) => j.copy(condition = Some(simplifyConditional(cond)))
-    case d @ DeleteFromTable(_, Some(cond)) => d.copy(condition = Some(simplifyConditional(cond)))
-    case u @ UpdateTable(_, _, Some(cond)) => u.copy(condition = Some(simplifyConditional(cond)))
-  }
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM SimplifyConditionalsInPredicate") {
+    plan transform {
+    case f @ Filter(cond, _) =>
+      CustomLogger.logMatchTime("DARSHANA Match SimplifyConditionalsInPredicate", true) {
+      f.copy(condition = simplifyConditional(cond))}
+    case j @ Join(_, _, _, Some(cond), _) =>
+    CustomLogger.logMatchTime("DARSHANA Match SimplifyConditionalsInPredicate", true) {
+      j.copy(condition = Some(simplifyConditional(cond)))}
+    case d @ DeleteFromTable(_, Some(cond)) =>
+      CustomLogger.logMatchTime("DARSHANA Match SimplifyConditionalsInPredicate", true) {
+      d.copy(condition = Some(simplifyConditional(cond)))}
+    case u @ UpdateTable(_, _, Some(cond)) =>
+      CustomLogger.logMatchTime("DARSHANA Match SimplifyConditionalsInPredicate", true) {
+      u.copy(condition = Some(simplifyConditional(cond)))}
+  }}
 
   private def simplifyConditional(e: Expression): Expression = e match {
     case And(left, right) => And(simplifyConditional(left), simplifyConditional(right))

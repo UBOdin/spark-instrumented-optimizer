@@ -19,6 +19,7 @@ package org.apache.spark.sql.catalyst.analysis
 
 import scala.util.control.NonFatal
 
+import org.apache.spark.sql.catalyst.CustomLogger
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.plans.logical.{LocalRelation, LogicalPlan}
 import org.apache.spark.sql.catalyst.rules.Rule
@@ -28,12 +29,15 @@ import org.apache.spark.sql.types.{StructField, StructType}
  * An analyzer rule that replaces [[UnresolvedInlineTable]] with [[LocalRelation]].
  */
 object ResolveInlineTables extends Rule[LogicalPlan] with CastSupport {
-  override def apply(plan: LogicalPlan): LogicalPlan = plan resolveOperators {
+  override def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM ResolveInlineTables") {
+    plan resolveOperators {
     case table: UnresolvedInlineTable if table.expressionsResolved =>
+      CustomLogger.logMatchTime("DARSHANA Match ResolveInlineTables", true) {
       validateInputDimension(table)
       validateInputEvaluable(table)
-      convert(table)
-  }
+      convert(table)}
+  }}
 
   /**
    * Validates the input data dimension:

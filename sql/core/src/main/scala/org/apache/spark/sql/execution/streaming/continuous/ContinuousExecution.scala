@@ -28,24 +28,29 @@ import org.apache.spark.SparkEnv
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.catalyst.expressions.{CurrentDate, CurrentTimestamp}
 import org.apache.spark.sql.catalyst.plans.logical.LogicalPlan
-import org.apache.spark.sql.catalyst.streaming.{StreamingRelationV2, WriteToStream}
+import org.apache.spark.sql.catalyst.streaming.StreamingRelationV2
 import org.apache.spark.sql.connector.catalog.{SupportsRead, SupportsWrite, TableCapability}
 import org.apache.spark.sql.connector.read.streaming.{ContinuousStream, Offset => OffsetV2, PartitionOffset, ReadLimit}
 import org.apache.spark.sql.execution.SQLExecution
 import org.apache.spark.sql.execution.datasources.v2.StreamingDataSourceV2Relation
 import org.apache.spark.sql.execution.streaming._
-import org.apache.spark.sql.streaming.Trigger
+import org.apache.spark.sql.streaming.{OutputMode, Trigger}
 import org.apache.spark.util.Clock
 
 class ContinuousExecution(
     sparkSession: SparkSession,
+    name: String,
+    checkpointRoot: String,
+    analyzedPlan: LogicalPlan,
+    sink: SupportsWrite,
     trigger: Trigger,
     triggerClock: Clock,
+    outputMode: OutputMode,
     extraOptions: Map[String, String],
-    plan: WriteToStream)
+    deleteCheckpointOnStop: Boolean)
   extends StreamExecution(
-    sparkSession, plan.name, plan.resolvedCheckpointLocation, plan.inputQuery, plan.sink,
-    trigger, triggerClock, plan.outputMode, plan.deleteCheckpointOnStop) {
+    sparkSession, name, checkpointRoot, analyzedPlan, sink,
+    trigger, triggerClock, outputMode, deleteCheckpointOnStop) {
 
   @volatile protected var sources: Seq[ContinuousStream] = Seq()
 
@@ -85,8 +90,7 @@ class ContinuousExecution(
 
     // TODO (SPARK-27484): we should add the writing node before the plan is analyzed.
     WriteToContinuousDataSource(
-      createStreamingWrite(
-        plan.sink.asInstanceOf[SupportsWrite], extraOptions, _logicalPlan), _logicalPlan)
+      createStreamingWrite(sink, extraOptions, _logicalPlan), _logicalPlan)
   }
 
   private val triggerExecutor = trigger match {

@@ -517,10 +517,7 @@ case class StringReplace(srcExpr: Expression, searchExpr: Expression, replaceExp
 
   override def dataType: DataType = StringType
   override def inputTypes: Seq[DataType] = Seq(StringType, StringType, StringType)
-  override def first: Expression = srcExpr
-  override def second: Expression = searchExpr
-  override def third: Expression = replaceExpr
-
+  override def children: Seq[Expression] = srcExpr :: searchExpr :: replaceExpr :: Nil
   override def prettyName: String = "replace"
 }
 
@@ -724,9 +721,7 @@ case class StringTranslate(srcExpr: Expression, matchingExpr: Expression, replac
 
   override def dataType: DataType = StringType
   override def inputTypes: Seq[DataType] = Seq(StringType, StringType, StringType)
-  override def first: Expression = srcExpr
-  override def second: Expression = matchingExpr
-  override def third: Expression = replaceExpr
+  override def children: Seq[Expression] = srcExpr :: matchingExpr :: replaceExpr :: Nil
   override def prettyName: String = "translate"
 }
 
@@ -1147,9 +1142,7 @@ case class SubstringIndex(strExpr: Expression, delimExpr: Expression, countExpr:
 
   override def dataType: DataType = StringType
   override def inputTypes: Seq[DataType] = Seq(StringType, StringType, IntegerType)
-  override def first: Expression = strExpr
-  override def second: Expression = delimExpr
-  override def third: Expression = countExpr
+  override def children: Seq[Expression] = Seq(strExpr, delimExpr, countExpr)
   override def prettyName: String = "substring_index"
 
   override def nullSafeEval(str: Any, delim: Any, count: Any): Any = {
@@ -1192,9 +1185,7 @@ case class StringLocate(substr: Expression, str: Expression, start: Expression)
     this(substr, str, Literal(1))
   }
 
-  override def first: Expression = substr
-  override def second: Expression = str
-  override def third: Expression = start
+  override def children: Seq[Expression] = substr :: str :: start :: Nil
   override def nullable: Boolean = substr.nullable || str.nullable
   override def dataType: DataType = IntegerType
   override def inputTypes: Seq[DataType] = Seq(StringType, StringType, IntegerType)
@@ -1284,9 +1275,7 @@ case class StringLPad(str: Expression, len: Expression, pad: Expression = Litera
     this(str, len, Literal(" "))
   }
 
-  override def first: Expression = str
-  override def second: Expression = len
-  override def third: Expression = pad
+  override def children: Seq[Expression] = str :: len :: pad :: Nil
   override def dataType: DataType = StringType
   override def inputTypes: Seq[DataType] = Seq(StringType, IntegerType, StringType)
 
@@ -1328,10 +1317,7 @@ case class StringRPad(str: Expression, len: Expression, pad: Expression = Litera
     this(str, len, Literal(" "))
   }
 
-  override def first: Expression = str
-  override def second: Expression = len
-  override def third: Expression = pad
-
+  override def children: Seq[Expression] = str :: len :: pad :: Nil
   override def dataType: DataType = StringType
   override def inputTypes: Seq[DataType] = Seq(StringType, IntegerType, StringType)
 
@@ -1742,9 +1728,7 @@ case class Substring(str: Expression, pos: Expression, len: Expression)
   override def inputTypes: Seq[AbstractDataType] =
     Seq(TypeCollection(StringType, BinaryType), IntegerType, IntegerType)
 
-  override def first: Expression = str
-  override def second: Expression = pos
-  override def third: Expression = len
+  override def children: Seq[Expression] = str :: pos :: len :: Nil
 
   override def nullSafeEval(string: Any, pos: Any, len: Any): Any = {
     str.dataType match {
@@ -2455,7 +2439,7 @@ case class Sentences(
     str: Expression,
     language: Expression = Literal(""),
     country: Expression = Literal(""))
-  extends TernaryExpression with ImplicitCastInputTypes with CodegenFallback {
+  extends Expression with ImplicitCastInputTypes with CodegenFallback {
 
   def this(str: Expression) = this(str, Literal(""), Literal(""))
   def this(str: Expression, language: Expression) = this(str, language, Literal(""))
@@ -2464,9 +2448,7 @@ case class Sentences(
   override def dataType: DataType =
     ArrayType(ArrayType(StringType, containsNull = false), containsNull = false)
   override def inputTypes: Seq[AbstractDataType] = Seq(StringType, StringType, StringType)
-  override def first: Expression = str
-  override def second: Expression = language
-  override def third: Expression = country
+  override def children: Seq[Expression] = str :: language :: country :: Nil
 
   override def eval(input: InternalRow): Any = {
     val string = str.eval(input)

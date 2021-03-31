@@ -17,6 +17,7 @@
 
 package org.apache.spark.sql.catalyst.optimizer
 
+import org.apache.spark.sql.catalyst.CustomLogger
 import org.apache.spark.sql.catalyst.expressions.{Alias, And, ArrayTransform, CaseWhen, Coalesce, CreateArray, CreateMap, CreateNamedStruct, EqualTo, ExpectsInputTypes, Expression, GetStructField, If, IsNull, KnownFloatingPointNormalized, LambdaFunction, Literal, NamedLambdaVariable, UnaryExpression}
 import org.apache.spark.sql.catalyst.expressions.codegen.{CodegenContext, ExprCode}
 import org.apache.spark.sql.catalyst.planning.ExtractEquiJoinKeys
@@ -56,12 +57,15 @@ import org.apache.spark.sql.types._
 object NormalizeFloatingNumbers extends Rule[LogicalPlan] {
 
   def apply(plan: LogicalPlan): LogicalPlan = plan match {
-    case _ => plan transform {
+    case _ =>
+      CustomLogger.logTransformTime("DARSHANA TRANSFORM NormalizeFloatingNumbers") {
+      plan transform {
       case w: Window if w.partitionSpec.exists(p => needNormalize(p)) =>
         // Although the `windowExpressions` may refer to `partitionSpec` expressions, we don't need
         // to normalize the `windowExpressions`, as they are executed per input row and should take
         // the input row as it is.
-        w.copy(partitionSpec = w.partitionSpec.map(normalize))
+        CustomLogger.logMatchTime("DARSHANA Match NormalizeFloatingNumbers", true) {
+        w.copy(partitionSpec = w.partitionSpec.map(normalize))}
 
       // Only hash join and sort merge join need the normalization. Here we catch all Joins with
       // join keys, assuming Joins with join keys are always planned as hash join or sort merge
@@ -70,17 +74,18 @@ object NormalizeFloatingNumbers extends Rule[LogicalPlan] {
           // The analyzer guarantees left and right joins keys are of the same data type. Here we
           // only need to check join keys of one side.
           if leftKeys.exists(k => needNormalize(k)) =>
+        CustomLogger.logMatchTime("DARSHANA Match NormalizeFloatingNumbers", true) {
         val newLeftJoinKeys = leftKeys.map(normalize)
         val newRightJoinKeys = rightKeys.map(normalize)
         val newConditions = newLeftJoinKeys.zip(newRightJoinKeys).map {
           case (l, r) => EqualTo(l, r)
         } ++ condition
-        j.copy(condition = Some(newConditions.reduce(And)))
+        j.copy(condition = Some(newConditions.reduce(And)))}
 
       // TODO: ideally Aggregate should also be handled here, but its grouping expressions are
       // mixed in its aggregate expressions. It's unreliable to change the grouping expressions
       // here. For now we normalize grouping expressions in `AggUtils` during planning.
-    }
+    }}
   }
 
   /**

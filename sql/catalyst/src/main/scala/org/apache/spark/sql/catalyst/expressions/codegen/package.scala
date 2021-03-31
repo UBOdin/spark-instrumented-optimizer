@@ -19,6 +19,7 @@ package org.apache.spark.sql.catalyst.expressions
 
 import scala.reflect.internal.util.AbstractFileClassLoader
 
+import org.apache.spark.sql.catalyst.CustomLogger
 import org.apache.spark.sql.catalyst.rules
 import org.apache.spark.util.Utils
 
@@ -34,9 +35,13 @@ package object codegen {
       Batch("CleanExpressions", FixedPoint(20), CleanExpressions) :: Nil
 
     object CleanExpressions extends rules.Rule[Expression] {
-      def apply(e: Expression): Expression = e transform {
-        case Alias(c, _) => c
-      }
+      def apply(e: Expression): Expression =
+        CustomLogger.logTransformTime("DARSHANA TRANSFORM CleanExpressions") {
+        e transform {
+        case Alias(c, _) =>
+          CustomLogger.logMatchTime("DARSHANA Match CleanExpressions", true) {
+          c}
+      }}
     }
   }
 

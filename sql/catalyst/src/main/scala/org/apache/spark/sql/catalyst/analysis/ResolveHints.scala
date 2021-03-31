@@ -21,6 +21,7 @@ import java.util.Locale
 
 import scala.collection.mutable
 
+import org.apache.spark.sql.catalyst.CustomLogger
 import org.apache.spark.sql.catalyst.expressions.{Ascending, Expression, IntegerLiteral, SortOrder}
 import org.apache.spark.sql.catalyst.plans.logical._
 import org.apache.spark.sql.catalyst.rules.Rule
@@ -143,8 +144,11 @@ object ResolveHints {
       }
     }
 
-    def apply(plan: LogicalPlan): LogicalPlan = plan resolveOperatorsUp {
+    def apply(plan: LogicalPlan): LogicalPlan =
+      CustomLogger.logTransformTime("DARSHANA TRANSFORM ResolveJoinStrategyHints") {
+      plan resolveOperatorsUp {
       case h: UnresolvedHint if STRATEGY_HINT_NAMES.contains(h.name.toUpperCase(Locale.ROOT)) =>
+        CustomLogger.logMatchTime("DARSHANA Match ResolveJoinStrategyHints", true) {
         if (h.parameters.isEmpty) {
           // If there is no table alias specified, apply the hint on the entire subtree.
           ResolvedHint(h.child, createHintInfo(h.name))
@@ -164,8 +168,8 @@ object ResolveHints {
           val unmatchedIdents = relationNamesInHint -- relationsInHintWithMatch
           hintErrorHandler.hintRelationsNotFound(h.name, h.parameters, unmatchedIdents)
           applied
-        }
-    }
+        }}
+    }}
   }
 
   /**
@@ -246,8 +250,12 @@ object ResolveHints {
       }
     }
 
-    def apply(plan: LogicalPlan): LogicalPlan = plan.resolveOperators {
-      case hint @ UnresolvedHint(hintName, _, _) => hintName.toUpperCase(Locale.ROOT) match {
+    def apply(plan: LogicalPlan): LogicalPlan =
+      CustomLogger.logTransformTime("DARSHANA TRANSFORM ResolveCoalesceHints") {
+      plan.resolveOperators {
+      case hint @ UnresolvedHint(hintName, _, _) =>
+        CustomLogger.logMatchTime("DARSHANA Match ResolveCoalesceHints", true) {
+        hintName.toUpperCase(Locale.ROOT) match {
           case "REPARTITION" =>
             createRepartition(shuffle = true, hint)
           case "COALESCE" =>
@@ -255,8 +263,8 @@ object ResolveHints {
           case "REPARTITION_BY_RANGE" =>
             createRepartitionByRange(hint)
           case _ => hint
-        }
-    }
+        }}
+    }}
   }
 
   /**
@@ -267,11 +275,14 @@ object ResolveHints {
 
     private def hintErrorHandler = conf.hintErrorHandler
 
-    def apply(plan: LogicalPlan): LogicalPlan = plan resolveOperatorsUp {
+    def apply(plan: LogicalPlan): LogicalPlan =
+      CustomLogger.logTransformTime("DARSHANA TRANSFORM RemoveAllHints") {
+      plan resolveOperatorsUp {
       case h: UnresolvedHint =>
+        CustomLogger.logMatchTime("DARSHANA Match RemoveAllHints", true) {
         hintErrorHandler.hintNotRecognized(h.name, h.parameters)
-        h.child
-    }
+        h.child}
+    }}
   }
 
   /**

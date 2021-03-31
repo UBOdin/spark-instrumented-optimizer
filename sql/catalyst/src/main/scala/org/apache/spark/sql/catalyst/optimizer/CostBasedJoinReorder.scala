@@ -20,6 +20,7 @@ package org.apache.spark.sql.catalyst.optimizer
 import scala.collection.mutable
 
 import org.apache.spark.internal.Logging
+import org.apache.spark.sql.catalyst.CustomLogger
 import org.apache.spark.sql.catalyst.expressions.{And, Attribute, AttributeSet, Expression, ExpressionSet, PredicateHelper}
 import org.apache.spark.sql.catalyst.plans.{Inner, InnerLike, JoinType}
 import org.apache.spark.sql.catalyst.plans.logical._
@@ -38,19 +39,26 @@ object CostBasedJoinReorder extends Rule[LogicalPlan] with PredicateHelper {
     if (!conf.cboEnabled || !conf.joinReorderEnabled) {
       plan
     } else {
-      val result = plan transformDown {
+      val result =
+        CustomLogger.logTransformTime("DARSHANA TRANSFORM CostBasedJoinReorder") {
+        plan transformDown {
         // Start reordering with a joinable item, which is an InnerLike join with conditions.
         // Avoid reordering if a join hint is present.
         case j @ Join(_, _, _: InnerLike, Some(cond), JoinHint.NONE) =>
-          reorder(j, j.output)
+          CustomLogger.logMatchTime("DARSHANA Match CostBasedJoinReorder", true) {
+          reorder(j, j.output)}
         case p @ Project(projectList, Join(_, _, _: InnerLike, Some(cond), JoinHint.NONE))
           if projectList.forall(_.isInstanceOf[Attribute]) =>
-          reorder(p, p.output)
-      }
+          CustomLogger.logMatchTime("DARSHANA Match CostBasedJoinReorder", true) {
+          reorder(p, p.output)}
+      }}
       // After reordering is finished, convert OrderedJoin back to Join.
+      CustomLogger.logTransformTime("DARSHANA TRANSFORM CostBasedJoinReorder") {
       result transform {
-        case OrderedJoin(left, right, jt, cond) => Join(left, right, jt, cond, JoinHint.NONE)
-      }
+        case OrderedJoin(left, right, jt, cond) =>
+          CustomLogger.logMatchTime("DARSHANA Match CostBasedJoinReorder", true) {
+          Join(left, right, jt, cond, JoinHint.NONE)}
+      }}
     }
   }
 

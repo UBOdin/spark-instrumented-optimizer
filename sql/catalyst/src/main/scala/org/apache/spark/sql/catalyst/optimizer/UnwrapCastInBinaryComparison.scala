@@ -17,6 +17,7 @@
 
 package org.apache.spark.sql.catalyst.optimizer
 
+import org.apache.spark.sql.catalyst.CustomLogger
 import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.catalyst.expressions.Literal.FalseLiteral
 import org.apache.spark.sql.catalyst.plans.logical.LogicalPlan
@@ -87,12 +88,15 @@ import org.apache.spark.sql.types._
  * Similarly, `if(isnull(fromExp), null, true)` is represented with `or(isnotnull(fromExp), null)`.
  */
 object UnwrapCastInBinaryComparison extends Rule[LogicalPlan] {
-  override def apply(plan: LogicalPlan): LogicalPlan = plan transform {
+  override def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM UnwrapCastInBinaryComparison") {
+    plan transform {
     case l: LogicalPlan =>
+      CustomLogger.logMatchTime("DARSHANA Match UnwrapCastInBinaryComparison", true) {
       l transformExpressionsUp {
         case e @ BinaryComparison(_, _) => unwrapCast(e)
-      }
-  }
+      }}
+  }}
 
   private def unwrapCast(exp: Expression): Expression = exp match {
     // Not a canonical form. In this case we first canonicalize the expression by swapping the

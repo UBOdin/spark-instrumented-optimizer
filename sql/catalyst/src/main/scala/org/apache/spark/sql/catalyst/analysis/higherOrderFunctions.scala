@@ -17,6 +17,7 @@
 
 package org.apache.spark.sql.catalyst.analysis
 
+import org.apache.spark.sql.catalyst.CustomLogger
 import org.apache.spark.sql.catalyst.catalog.SessionCatalog
 import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.catalyst.plans.logical.LogicalPlan
@@ -32,9 +33,12 @@ import org.apache.spark.sql.types.DataType
  */
 case class ResolveHigherOrderFunctions(catalog: SessionCatalog) extends Rule[LogicalPlan] {
 
-  override def apply(plan: LogicalPlan): LogicalPlan = plan.resolveExpressions {
+  override def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM ResolveHigherOrderFunctions") {
+    plan.resolveExpressions {
     case u @ UnresolvedFunction(fn, children, false, filter, ignoreNulls)
         if hasLambdaAndResolvedArguments(children) =>
+         CustomLogger.logMatchTime("DARSHANA Match ResolveHigherOrderFunctions", true) {
       withPosition(u) {
         catalog.lookupFunction(fn, children) match {
           case func: HigherOrderFunction =>
@@ -50,8 +54,8 @@ case class ResolveHigherOrderFunctions(catalog: SessionCatalog) extends Rule[Log
               s"its class is ${other.getClass.getCanonicalName}, which is not a " +
               s"higher order function.")
         }
-      }
-  }
+      }}
+  }}
 
   /**
    * Check if the arguments of a function are either resolved or a lambda function.
@@ -89,10 +93,12 @@ object ResolveLambdaVariables extends Rule[LogicalPlan] {
   }
 
   override def apply(plan: LogicalPlan): LogicalPlan = {
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM ResolveLambdaVariables") {
     plan.resolveOperators {
       case q: LogicalPlan =>
-        q.mapExpressions(resolve(_, Map.empty))
-    }
+         CustomLogger.logMatchTime("DARSHANA Match ResolveLambdaVariables", true) {
+          q.mapExpressions(resolve(_, Map.empty))}
+    }}
   }
 
   /**

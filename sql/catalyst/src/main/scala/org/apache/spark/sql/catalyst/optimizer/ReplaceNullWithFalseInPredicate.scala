@@ -17,6 +17,7 @@
 
 package org.apache.spark.sql.catalyst.optimizer
 
+import org.apache.spark.sql.catalyst.CustomLogger
 import org.apache.spark.sql.catalyst.expressions.{And, ArrayExists, ArrayFilter, CaseWhen, EqualNullSafe, Expression, If, LambdaFunction, Literal, MapFilter, Or}
 import org.apache.spark.sql.catalyst.expressions.Literal.{FalseLiteral, TrueLiteral}
 import org.apache.spark.sql.catalyst.plans.logical.{DeleteAction, DeleteFromTable, Filter, InsertAction, Join, LogicalPlan, MergeAction, MergeIntoTable, UpdateAction, UpdateTable}
@@ -49,17 +50,30 @@ import org.apache.spark.util.Utils
  */
 object ReplaceNullWithFalseInPredicate extends Rule[LogicalPlan] {
 
-  def apply(plan: LogicalPlan): LogicalPlan = plan transform {
-    case f @ Filter(cond, _) => f.copy(condition = replaceNullWithFalse(cond))
-    case j @ Join(_, _, _, Some(cond), _) => j.copy(condition = Some(replaceNullWithFalse(cond)))
-    case d @ DeleteFromTable(_, Some(cond)) => d.copy(condition = Some(replaceNullWithFalse(cond)))
-    case u @ UpdateTable(_, _, Some(cond)) => u.copy(condition = Some(replaceNullWithFalse(cond)))
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM ReplaceNullWithFalseInPredicate") {
+    plan transform {
+    case f @ Filter(cond, _) =>
+      CustomLogger.logMatchTime("DARSHANA Match ReplaceNullWithFalseInPredicate", true) {
+      f.copy(condition = replaceNullWithFalse(cond))}
+    case j @ Join(_, _, _, Some(cond), _) =>
+      CustomLogger.logMatchTime("DARSHANA Match ReplaceNullWithFalseInPredicate", true) {
+        j.copy(condition = Some(replaceNullWithFalse(cond)))}
+    case d @ DeleteFromTable(_, Some(cond)) =>
+      CustomLogger.logMatchTime("DARSHANA Match ReplaceNullWithFalseInPredicate", true) {
+      d.copy(condition = Some(replaceNullWithFalse(cond)))}
+    case u @ UpdateTable(_, _, Some(cond)) =>
+      CustomLogger.logMatchTime("DARSHANA Match ReplaceNullWithFalseInPredicate", true) {
+      u.copy(condition = Some(replaceNullWithFalse(cond)))}
     case m @ MergeIntoTable(_, _, mergeCond, matchedActions, notMatchedActions) =>
+      CustomLogger.logMatchTime("DARSHANA Match ReplaceNullWithFalseInPredicate", true) {
       m.copy(
         mergeCondition = replaceNullWithFalse(mergeCond),
         matchedActions = replaceNullWithFalse(matchedActions),
-        notMatchedActions = replaceNullWithFalse(notMatchedActions))
-    case p: LogicalPlan => p transformExpressions {
+        notMatchedActions = replaceNullWithFalse(notMatchedActions))}
+    case p: LogicalPlan =>
+      CustomLogger.logMatchTime("DARSHANA Match ReplaceNullWithFalseInPredicate", true) {
+      p transformExpressions {
       // For `EqualNullSafe` with a `TrueLiteral`, whether the other side is null or false has no
       // difference, as `null <=> true` and `false <=> true` both return false.
       case EqualNullSafe(left, TrueLiteral) =>
@@ -81,8 +95,8 @@ object ReplaceNullWithFalseInPredicate extends Rule[LogicalPlan] {
       case mf @ MapFilter(_, lf @ LambdaFunction(func, _, _)) =>
         val newLambda = lf.copy(function = replaceNullWithFalse(func))
         mf.copy(function = newLambda)
-    }
-  }
+    }}
+  }}
 
   /**
    * Recursively traverse the Boolean-type expression to replace

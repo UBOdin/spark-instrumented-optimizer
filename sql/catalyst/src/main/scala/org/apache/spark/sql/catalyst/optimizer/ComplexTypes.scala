@@ -17,6 +17,7 @@
 
 package org.apache.spark.sql.catalyst.optimizer
 
+import org.apache.spark.sql.catalyst.CustomLogger
 import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.catalyst.plans.logical.{Aggregate, LogicalPlan}
 import org.apache.spark.sql.catalyst.rules.Rule
@@ -25,7 +26,9 @@ import org.apache.spark.sql.catalyst.rules.Rule
  * Simplify redundant [[CreateNamedStruct]], [[CreateArray]] and [[CreateMap]] expressions.
  */
 object SimplifyExtractValueOps extends Rule[LogicalPlan] {
-  override def apply(plan: LogicalPlan): LogicalPlan = plan transform {
+  override def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM SimplifyExtractValueOps") {
+    plan transform {
     // One place where this optimization is invalid is an aggregation where the select
     // list expression is a function of a grouping expression:
     //
@@ -34,8 +37,12 @@ object SimplifyExtractValueOps extends Rule[LogicalPlan] {
     // cannot be simplified to SELECT a FROM tbl GROUP BY struct(a,b). So just skip this
     // optimization for Aggregates (although this misses some cases where the optimization
     // can be made).
-    case a: Aggregate => a
-    case p => p.transformExpressionsUp {
+    case a: Aggregate =>
+      CustomLogger.logMatchTime("DARSHANA Match SimplifyExtractValueOps", true) {
+      a}
+    case p =>
+      CustomLogger.logMatchTime("DARSHANA Match SimplifyExtractValueOps", true) {
+      p.transformExpressionsUp {
       // Remove redundant field extraction.
       case GetStructField(createNamedStruct: CreateNamedStruct, ordinal, _) =>
         createNamedStruct.valExprs(ordinal)
@@ -71,6 +78,6 @@ object SimplifyExtractValueOps extends Rule[LogicalPlan] {
           Literal(null, ga.dataType)
         }
       case GetMapValue(CreateMap(elems, _), key, _) => CaseKeyWhen(key, elems)
-    }
-  }
+    }}
+  }}
 }

@@ -19,12 +19,11 @@ package org.apache.spark.sql.connector
 
 import java.util
 
-import org.apache.spark.sql.catalyst.analysis.TableAlreadyExistsException
+import org.apache.spark.sql.catalyst.analysis.{CannotReplaceMissingTableException, TableAlreadyExistsException}
 import org.apache.spark.sql.connector.catalog._
 import org.apache.spark.sql.connector.expressions.Transform
 import org.apache.spark.sql.connector.read.ScanBuilder
 import org.apache.spark.sql.connector.write.{LogicalWriteInfo, WriteBuilder}
-import org.apache.spark.sql.errors.QueryCompilationErrors
 import org.apache.spark.sql.types.StructType
 import org.apache.spark.sql.util.CaseInsensitiveStringMap
 
@@ -119,7 +118,7 @@ class StagingInMemoryTableCatalog extends InMemoryTableCatalog with StagingTable
       maybeSimulateDropBeforeCommit()
       val maybePreCommittedTable = tables.replace(ident, delegateTable)
       if (maybePreCommittedTable == null) {
-        throw QueryCompilationErrors.cannotReplaceMissingTableError(ident)
+        throw new CannotReplaceMissingTableException(ident)
       }
     }
 

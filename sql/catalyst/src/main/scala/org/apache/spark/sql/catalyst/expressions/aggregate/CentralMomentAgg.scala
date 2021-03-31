@@ -20,7 +20,6 @@ package org.apache.spark.sql.catalyst.expressions.aggregate
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry
 import org.apache.spark.sql.catalyst.dsl.expressions._
 import org.apache.spark.sql.catalyst.expressions._
-import org.apache.spark.sql.catalyst.trees.UnaryLike
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.types._
 
@@ -46,13 +45,14 @@ import org.apache.spark.sql.types._
  * @param child to compute central moments of.
  */
 abstract class CentralMomentAgg(child: Expression, nullOnDivideByZero: Boolean)
-  extends DeclarativeAggregate with ImplicitCastInputTypes with UnaryLike[Expression] {
+  extends DeclarativeAggregate with ImplicitCastInputTypes {
 
   /**
    * The central moment order to be computed.
    */
   protected def momentOrder: Int
 
+  override def children: Seq[Expression] = Seq(child)
   override def nullable: Boolean = true
   override def dataType: DataType = DoubleType
   override def inputTypes: Seq[AbstractDataType] = Seq(DoubleType)

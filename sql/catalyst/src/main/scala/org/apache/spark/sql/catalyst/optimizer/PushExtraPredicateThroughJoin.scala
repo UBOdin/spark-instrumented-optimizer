@@ -17,6 +17,7 @@
 
 package org.apache.spark.sql.catalyst.optimizer
 
+import org.apache.spark.sql.catalyst.CustomLogger
 import org.apache.spark.sql.catalyst.expressions.{And, Expression, PredicateHelper}
 import org.apache.spark.sql.catalyst.plans._
 import org.apache.spark.sql.catalyst.plans.logical.{Filter, Join, LogicalPlan}
@@ -37,9 +38,12 @@ object PushExtraPredicateThroughJoin extends Rule[LogicalPlan] with PredicateHel
     case _ => false
   }
 
-  def apply(plan: LogicalPlan): LogicalPlan = plan transform {
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM PushExtraPredicateThroughJoin") {
+    plan transform {
     case j @ Join(left, right, joinType, Some(joinCondition), hint)
         if canPushThrough(joinType) =>
+      CustomLogger.logMatchTime("DARSHANA Match PushExtraPredicateThroughJoin", true) {
       val alreadyProcessed = j.getTagValue(processedJoinConditionTag).exists { condition =>
         condition.semanticEquals(joinCondition)
       }
@@ -73,6 +77,6 @@ object PushExtraPredicateThroughJoin extends Rule[LogicalPlan] with PredicateHel
         }
         newJoin.setTagValue(processedJoinConditionTag, joinCondition)
         newJoin
-    }
-  }
+    }}
+  }}
 }

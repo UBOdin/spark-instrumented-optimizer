@@ -23,7 +23,6 @@ import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.analysis.NamespaceAlreadyExistsException
 import org.apache.spark.sql.catalyst.expressions.Attribute
 import org.apache.spark.sql.connector.catalog.SupportsNamespaces
-import org.apache.spark.sql.errors.QueryCompilationErrors
 import org.apache.spark.util.Utils
 
 /**
@@ -50,7 +49,7 @@ case class CreateNamespaceExec(
           logWarning(s"Namespace ${namespace.quoted} was created concurrently. Ignoring.")
       }
     } else if (!ifNotExists) {
-      throw QueryCompilationErrors.namespaceAlreadyExistsError(ns)
+      throw new NamespaceAlreadyExistsException(ns)
     }
 
     Seq.empty

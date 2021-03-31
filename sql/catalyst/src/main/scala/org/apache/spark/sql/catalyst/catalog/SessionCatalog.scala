@@ -101,7 +101,7 @@ class SessionCatalog(
 
   /** List of temporary views, mapping from table name to their logical plan. */
   @GuardedBy("this")
-  protected val tempViews = new mutable.HashMap[String, TemporaryViewRelation]
+  protected val tempViews = new mutable.HashMap[String, LogicalPlan]
 
   // Note: we track current database here because certain operations do not explicitly
   // specify the database (e.g. DROP TABLE my_table). In these cases we must first
@@ -460,8 +460,8 @@ class SessionCatalog(
    * Return whether a table/view with the specified name exists. If no database is specified, check
    * with current database.
    */
-  def tableExists(name: TableIdentifier): Boolean = {
-    val db = formatDatabaseName(name.database.getOrElse(getCurrentDatabase))
+  def tableExists(name: TableIdentifier): Boolean = synchronized {
+    val db = formatDatabaseName(name.database.getOrElse(currentDb))
     val table = formatTableName(name.table)
     externalCatalog.tableExists(db, table)
   }
@@ -573,13 +573,13 @@ class SessionCatalog(
    */
   def createTempView(
       name: String,
-      viewDefinition: TemporaryViewRelation,
+      tableDefinition: LogicalPlan,
       overrideIfExists: Boolean): Unit = synchronized {
     val table = formatTableName(name)
     if (tempViews.contains(table) && !overrideIfExists) {
       throw new TempTableAlreadyExistsException(name)
     }
-    tempViews.put(table, viewDefinition)
+    tempViews.put(table, tableDefinition)
   }
 
   /**
@@ -587,7 +587,7 @@ class SessionCatalog(
    */
   def createGlobalTempView(
       name: String,
-      viewDefinition: TemporaryViewRelation,
+      viewDefinition: LogicalPlan,
       overrideIfExists: Boolean): Unit = {
     globalTempViewManager.create(formatTableName(name), viewDefinition, overrideIfExists)
   }
@@ -598,7 +598,7 @@ class SessionCatalog(
    */
   def alterTempViewDefinition(
       name: TableIdentifier,
-      viewDefinition: TemporaryViewRelation): Boolean = synchronized {
+      viewDefinition: LogicalPlan): Boolean = synchronized {
     val viewName = formatTableName(name.table)
     if (name.database.isEmpty) {
       if (tempViews.contains(viewName)) {
@@ -617,14 +617,14 @@ class SessionCatalog(
   /**
    * Return a local temporary view exactly as it was stored.
    */
-  def getRawTempView(name: String): Option[TemporaryViewRelation] = synchronized {
+  def getRawTempView(name: String): Option[LogicalPlan] = synchronized {
     tempViews.get(formatTableName(name))
   }
 
   /**
    * Generate a [[View]] operator from the temporary view stored.
    */
-  def getTempView(name: String): Option[View] = synchronized {
+  def getTempView(name: String): Option[LogicalPlan] = synchronized {
     getRawTempView(name).map(getTempViewPlan)
   }
 
@@ -635,14 +635,14 @@ class SessionCatalog(
   /**
    * Return a global temporary view exactly as it was stored.
    */
-  def getRawGlobalTempView(name: String): Option[TemporaryViewRelation] = {
+  def getRawGlobalTempView(name: String): Option[LogicalPlan] = {
     globalTempViewManager.get(formatTableName(name))
   }
 
   /**
    * Generate a [[View]] operator from the global temporary view stored.
    */
-  def getGlobalTempView(name: String): Option[View] = {
+  def getGlobalTempView(name: String): Option[LogicalPlan] = {
     getRawGlobalTempView(name).map(getTempViewPlan)
   }
 
@@ -680,10 +680,25 @@ class SessionCatalog(
   def getTempViewOrPermanentTableMetadata(name: TableIdentifier): CatalogTable = synchronized {
     val table = formatTableName(name.table)
     if (name.database.isEmpty) {
-      tempViews.get(table).map(_.tableMeta).getOrElse(getTableMetadata(name))
+      tempViews.get(table).map {
+        case TemporaryViewRelation(metadata, _) => metadata
+        case plan =>
+          CatalogTable(
+            identifier = TableIdentifier(table),
+            tableType = CatalogTableType.VIEW,
+            storage = CatalogStorageFormat.empty,
+            schema = plan.output.toStructType)
+      }.getOrElse(getTableMetadata(name))
     } else if (formatDatabaseName(name.database.get) == globalTempViewManager.database) {
-      globalTempViewManager.get(table).map(_.tableMeta)
-        .getOrElse(throw new NoSuchTableException(globalTempViewManager.database, table))
+      globalTempViewManager.get(table).map {
+        case TemporaryViewRelation(metadata, _) => metadata
+        case plan =>
+          CatalogTable(
+            identifier = TableIdentifier(table, Some(globalTempViewManager.database)),
+            tableType = CatalogTableType.VIEW,
+            storage = CatalogStorageFormat.empty,
+            schema = plan.output.toStructType)
+      }.getOrElse(throw new NoSuchTableException(globalTempViewManager.database, table))
     } else {
       getTableMetadata(name)
     }
@@ -819,9 +834,21 @@ class SessionCatalog(
     }
   }
 
-  private def getTempViewPlan(viewInfo: TemporaryViewRelation): View = viewInfo.plan match {
-    case Some(p) => View(desc = viewInfo.tableMeta, isTempView = true, child = p)
-    case None => fromCatalogTable(viewInfo.tableMeta, isTempView = true)
+  private def getTempViewPlan(plan: LogicalPlan): LogicalPlan = {
+    plan match {
+      case TemporaryViewRelation(tableMeta, None) =>
+        fromCatalogTable(tableMeta, isTempView = true)
+      case TemporaryViewRelation(tableMeta, Some(plan)) =>
+        View(desc = tableMeta, isTempView = true, child = plan)
+      case other => other
+    }
+  }
+
+  def getTempViewSchema(plan: LogicalPlan): StructType = {
+    plan match {
+      case viewInfo: TemporaryViewRelation => viewInfo.tableMeta.schema
+      case v => v.schema
+    }
   }
 
   private def fromCatalogTable(metadata: CatalogTable, isTempView: Boolean): View = {
@@ -847,29 +874,9 @@ class SessionCatalog(
     // the extra columns that we don't require), with UpCast (to make sure the type change is
     // safe) and Alias (to respect user-specified view column names) according to the view schema
     // in the catalog.
-    // Note that, the column names may have duplication, e.g. `CREATE VIEW v(x, y) AS
-    // SELECT 1 col, 2 col`. We need to make sure that the matching attributes have the same
-    // number of duplications, and pick the corresponding attribute by ordinal.
-    val viewConf = View.effectiveSQLConf(metadata.viewSQLConfigs, isTempView)
-    val normalizeColName: String => String = if (viewConf.caseSensitiveAnalysis) {
-      identity
-    } else {
-      _.toLowerCase(Locale.ROOT)
-    }
-    val nameToCounts = viewColumnNames.groupBy(normalizeColName).mapValues(_.length)
-    val nameToCurrentOrdinal = scala.collection.mutable.HashMap.empty[String, Int]
-
     val projectList = viewColumnNames.zip(metadata.schema).map { case (name, field) =>
-      val normalizedName = normalizeColName(name)
-      val count = nameToCounts(normalizedName)
-      val col = if (count > 1) {
-        val ordinal = nameToCurrentOrdinal.getOrElse(normalizedName, 0)
-        nameToCurrentOrdinal(normalizedName) = ordinal + 1
-        GetViewColumnByNameAndOrdinal(metadata.identifier.toString, name, ordinal, count)
-      } else {
-        UnresolvedAttribute.quoted(name)
-      }
-      Alias(UpCast(col, field.dataType), field.name)(explicitMetadata = Some(field.metadata))
+      Alias(UpCast(UnresolvedAttribute.quoted(name), field.dataType), field.name)(
+        explicitMetadata = Some(field.metadata))
     }
     View(desc = metadata, isTempView = isTempView, child = Project(projectList, parsedPlan))
   }
@@ -902,7 +909,7 @@ class SessionCatalog(
     isTempView(nameParts.asTableIdentifier)
   }
 
-  def lookupTempView(name: TableIdentifier): Option[View] = {
+  def lookupTempView(name: TableIdentifier): Option[LogicalPlan] = {
     val tableName = formatTableName(name.table)
     if (name.database.isEmpty) {
       tempViews.get(tableName).map(getTempViewPlan)

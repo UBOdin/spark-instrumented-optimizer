@@ -20,6 +20,7 @@ package org.apache.spark.sql.catalyst.analysis
 import scala.collection.mutable
 
 import org.apache.spark.sql.AnalysisException
+import org.apache.spark.sql.catalyst.CustomLogger
 import org.apache.spark.sql.catalyst.expressions.SubqueryExpression
 import org.apache.spark.sql.catalyst.plans.logical.{LogicalPlan, SubqueryAlias, With}
 import org.apache.spark.sql.catalyst.rules.Rule
@@ -29,17 +30,22 @@ import org.apache.spark.sql.internal.SQLConf.{LEGACY_CTE_PRECEDENCE_POLICY, Lega
  * Analyze WITH nodes and substitute child plan with CTE definitions.
  */
 object CTESubstitution extends Rule[LogicalPlan] {
-  def apply(plan: LogicalPlan): LogicalPlan = {
+  def apply(plan: LogicalPlan): LogicalPlan =
+  CustomLogger.logTransformTime("DARSHANA TRANSFORM CTESubstitution") {
+  {
     LegacyBehaviorPolicy.withName(conf.getConf(LEGACY_CTE_PRECEDENCE_POLICY)) match {
       case LegacyBehaviorPolicy.EXCEPTION =>
+        CustomLogger.logMatchTime("DARSHANA Match CTESubstitution", true) {
         assertNoNameConflictsInCTE(plan)
-        traverseAndSubstituteCTE(plan)
+        traverseAndSubstituteCTE(plan)}
       case LegacyBehaviorPolicy.LEGACY =>
-        legacyTraverseAndSubstituteCTE(plan)
+        CustomLogger.logMatchTime("DARSHANA Match CTESubstitution", true) {
+        legacyTraverseAndSubstituteCTE(plan)}
       case LegacyBehaviorPolicy.CORRECTED =>
-        traverseAndSubstituteCTE(plan)
+        CustomLogger.logMatchTime("DARSHANA Match CTESubstitution", true) {
+        traverseAndSubstituteCTE(plan)}
     }
-  }
+  }}
 
   /**
    * Spark 3.0 changes the CTE relations resolution, and inner relations take precedence. This is

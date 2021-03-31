@@ -335,8 +335,12 @@ class Analyzer(override val catalogManager: CatalogManager)
    * 2. otherwise, stays the same.
    */
   object ResolveBinaryArithmetic extends Rule[LogicalPlan] {
-    override def apply(plan: LogicalPlan): LogicalPlan = plan.resolveOperatorsUp {
-      case p: LogicalPlan => p.transformExpressionsUp {
+    override def apply(plan: LogicalPlan): LogicalPlan =
+      CustomLogger.logTransformTime("DARSHANA TRANSFORM ResolveBinaryArithmetic") {
+      plan.resolveOperatorsUp {
+      case p: LogicalPlan =>
+        CustomLogger.logMatchTime("DARSHANA Match ResolveBinaryArithmetic", true) {
+        p.transformExpressionsUp {
         case a @ Add(l, r, f) if a.childrenResolved => (l.dataType, r.dataType) match {
           case (DateType, YearMonthIntervalType) => DateAddYMInterval(l, r)
           case (YearMonthIntervalType, DateType) => DateAddYMInterval(r, l)
@@ -372,35 +376,33 @@ class Analyzer(override val catalogManager: CatalogManager)
         case m @ Multiply(l, r, f) if m.childrenResolved => (l.dataType, r.dataType) match {
           case (CalendarIntervalType, _) => MultiplyInterval(l, r, f)
           case (_, CalendarIntervalType) => MultiplyInterval(r, l, f)
-          case (YearMonthIntervalType, _) => MultiplyYMInterval(l, r)
-          case (_, YearMonthIntervalType) => MultiplyYMInterval(r, l)
-          case (DayTimeIntervalType, _) => MultiplyDTInterval(l, r)
-          case (_, DayTimeIntervalType) => MultiplyDTInterval(r, l)
           case _ => m
         }
         case d @ Divide(l, r, f) if d.childrenResolved => (l.dataType, r.dataType) match {
           case (CalendarIntervalType, _) => DivideInterval(l, r, f)
-          case (YearMonthIntervalType, _) => DivideYMInterval(l, r)
-          case (DayTimeIntervalType, _) => DivideDTInterval(l, r)
           case _ => d
         }
-      }
-    }
+      }}
+    }}
   }
 
   /**
    * Substitute child plan with WindowSpecDefinitions.
    */
   object WindowsSubstitution extends Rule[LogicalPlan] {
-    def apply(plan: LogicalPlan): LogicalPlan = plan.resolveOperatorsUp {
+    def apply(plan: LogicalPlan): LogicalPlan =
+      CustomLogger.logTransformTime("DARSHANA TRANSFORM WindowsSubstitution") {
+      plan.resolveOperatorsUp {
       // Lookup WindowSpecDefinitions. This rule works with unresolved children.
-      case WithWindowDefinition(windowDefinitions, child) => child.resolveExpressions {
+      case WithWindowDefinition(windowDefinitions, child) =>
+        CustomLogger.logMatchTime("DARSHANA Match WindowsSubstitution", true) {
+        child.resolveExpressions {
         case UnresolvedWindowExpression(c, WindowSpecReference(windowName)) =>
           val windowSpecDefinition = windowDefinitions.getOrElse(windowName,
             throw QueryCompilationErrors.windowSpecificationNotDefinedError(windowName))
           WindowExpression(c, windowSpecDefinition)
-      }
-    }
+      }}
+    }}
   }
 
   /**
@@ -427,20 +429,63 @@ class Analyzer(override val catalogManager: CatalogManager)
     private def hasUnresolvedAlias(exprs: Seq[NamedExpression]) =
       exprs.exists(_.find(_.isInstanceOf[UnresolvedAlias]).isDefined)
 
-    def apply(plan: LogicalPlan): LogicalPlan = plan.resolveOperatorsUp {
+    def apply(plan: LogicalPlan): LogicalPlan =
+      CustomLogger.logTransformTime("DARSHANA TRANSFORM ResolveAliases") {
+      plan.resolveOperatorsUp {
       case Aggregate(groups, aggs, child) if child.resolved && hasUnresolvedAlias(aggs) =>
-        Aggregate(groups, assignAliases(aggs), child)
+        CustomLogger.logMatchTime("DARSHANA Match ResolveAliases", true) {
+        Aggregate(groups, assignAliases(aggs), child)}
+
+      case g: GroupingSets if g.child.resolved && hasUnresolvedAlias(g.aggregations) =>
+        CustomLogger.logMatchTime("DARSHANA Match ResolveAliases", true) {
+        g.copy(aggregations = assignAliases(g.aggregations))}
 
       case Pivot(groupByOpt, pivotColumn, pivotValues, aggregates, child)
         if child.resolved && groupByOpt.isDefined && hasUnresolvedAlias(groupByOpt.get) =>
-        Pivot(Some(assignAliases(groupByOpt.get)), pivotColumn, pivotValues, aggregates, child)
+        CustomLogger.logMatchTime("DARSHANA Match ResolveAliases", true) {
+        Pivot(Some(assignAliases(groupByOpt.get)), pivotColumn, pivotValues, aggregates, child)}
 
       case Project(projectList, child) if child.resolved && hasUnresolvedAlias(projectList) =>
-        Project(assignAliases(projectList), child)
-    }
+        CustomLogger.logMatchTime("DARSHANA Match ResolveAliases", true) {
+        Project(assignAliases(projectList), child)}
+    }}
   }
 
   object ResolveGroupingAnalytics extends Rule[LogicalPlan] {
+    /*
+     *  GROUP BY a, b, c WITH ROLLUP
+     *  is equivalent to
+     *  GROUP BY a, b, c GROUPING SETS ( (a, b, c), (a, b), (a), ( ) ).
+     *  Group Count: N + 1 (N is the number of group expressions)
+     *
+     *  We need to get all of its subsets for the rule described above, the subset is
+     *  represented as sequence of expressions.
+     */
+    def rollupExprs(exprs: Seq[Expression]): Seq[Seq[Expression]] = exprs.inits.toIndexedSeq
+
+    /*
+     *  GROUP BY a, b, c WITH CUBE
+     *  is equivalent to
+     *  GROUP BY a, b, c GROUPING SETS ( (a, b, c), (a, b), (b, c), (a, c), (a), (b), (c), ( ) ).
+     *  Group Count: 2 ^ N (N is the number of group expressions)
+     *
+     *  We need to get all of its subsets for a given GROUPBY expression, the subsets are
+     *  represented as sequence of expressions.
+     */
+    def cubeExprs(exprs: Seq[Expression]): Seq[Seq[Expression]] = {
+      // `cubeExprs0` is recursive and returns a lazy Stream. Here we call `toIndexedSeq` to
+      // materialize it and avoid serialization problems later on.
+      cubeExprs0(exprs).toIndexedSeq
+    }
+
+    def cubeExprs0(exprs: Seq[Expression]): Seq[Seq[Expression]] = exprs.toList match {
+      case x :: xs =>
+        val initial = cubeExprs0(xs)
+        initial.map(x +: _) ++ initial
+      case Nil =>
+        Seq(Seq.empty)
+    }
+
     private[analysis] def hasGroupingFunction(e: Expression): Boolean = {
       e.collectFirst {
         case g: Grouping => g
@@ -620,9 +665,14 @@ class Analyzer(override val catalogManager: CatalogManager)
       val aggForResolving = h.child match {
         // For CUBE/ROLLUP expressions, to avoid resolving repeatedly, here we delete them from
         // groupingExpressions for condition resolving.
-        case a @ Aggregate(Seq(gs: GroupingSet), _, _) =>
-          a.copy(groupingExpressions =
-            getFinalGroupByExpressions(gs.groupingSets, gs.groupByExprs))
+        case a @ Aggregate(Seq(c @ Cube(groupByExprs)), _, _) =>
+          a.copy(groupingExpressions = groupByExprs)
+        case a @ Aggregate(Seq(r @ Rollup(groupByExprs)), _, _) =>
+          a.copy(groupingExpressions = groupByExprs)
+        case g: GroupingSets =>
+          Aggregate(
+            getFinalGroupByExpressions(g.selectedGroupByExprs, g.groupByExprs),
+            g.aggregations, g.child)
       }
       // Try resolving the condition of the filter as though it is in the aggregate clause
       val resolvedInfo =
@@ -632,10 +682,15 @@ class Analyzer(override val catalogManager: CatalogManager)
       if (resolvedInfo.nonEmpty) {
         val (extraAggExprs, resolvedHavingCond) = resolvedInfo.get
         val newChild = h.child match {
-          case Aggregate(Seq(gs: GroupingSet), aggregateExpressions, child) =>
+          case Aggregate(Seq(c @ Cube(groupByExprs)), aggregateExpressions, child) =>
             constructAggregate(
-              gs.selectedGroupByExprs, gs.groupByExprs,
-              aggregateExpressions ++ extraAggExprs, child)
+              cubeExprs(groupByExprs), groupByExprs, aggregateExpressions ++ extraAggExprs, child)
+          case Aggregate(Seq(r @ Rollup(groupByExprs)), aggregateExpressions, child) =>
+            constructAggregate(
+              rollupExprs(groupByExprs), groupByExprs, aggregateExpressions ++ extraAggExprs, child)
+          case x: GroupingSets =>
+            constructAggregate(
+              x.selectedGroupByExprs, x.groupByExprs, x.aggregations ++ extraAggExprs, x.child)
         }
 
         // Since the exprId of extraAggExprs will be changed in the constructed aggregate, and the
@@ -657,42 +712,73 @@ class Analyzer(override val catalogManager: CatalogManager)
     // This require transformDown to resolve having condition when generating aggregate node for
     // CUBE/ROLLUP/GROUPING SETS. This also replace grouping()/grouping_id() in resolved
     // Filter/Sort.
-    def apply(plan: LogicalPlan): LogicalPlan = plan resolveOperatorsDown {
-      case h @ UnresolvedHaving(_, agg @ Aggregate(Seq(gs: GroupingSet), aggregateExpressions, _))
-        if agg.childrenResolved && (gs.groupByExprs ++ aggregateExpressions).forall(_.resolved) =>
-        tryResolveHavingCondition(h)
+    def apply(plan: LogicalPlan): LogicalPlan =
+      CustomLogger.logTransformTime("DARSHANA TRANSFORM ResolveGroupingAnalytics") {
+      plan resolveOperatorsDown {
+      case h @ UnresolvedHaving(
+          _, agg @ Aggregate(Seq(c @ Cube(groupByExprs)), aggregateExpressions, _))
+          if agg.childrenResolved && (groupByExprs ++ aggregateExpressions).forall(_.resolved) =>
+        CustomLogger.logMatchTime("DARSHANA TRANSFORM ResolveGroupingAnalytics", true) {
+        tryResolveHavingCondition(h)}
+      case h @ UnresolvedHaving(
+          _, agg @ Aggregate(Seq(r @ Rollup(groupByExprs)), aggregateExpressions, _))
+          if agg.childrenResolved && (groupByExprs ++ aggregateExpressions).forall(_.resolved) =>
+        CustomLogger.logMatchTime("DARSHANA TRANSFORM ResolveGroupingAnalytics", true) {
+        tryResolveHavingCondition(h)}
+      case h @ UnresolvedHaving(_, g: GroupingSets)
+          if g.childrenResolved && g.expressions.forall(_.resolved) =>
+        CustomLogger.logMatchTime("DARSHANA TRANSFORM ResolveGroupingAnalytics", true) {
+        tryResolveHavingCondition(h)}
 
-      case a if !a.childrenResolved => a // be sure all of the children are resolved.
+      case a if !a.childrenResolved =>
+        CustomLogger.logMatchTime("DARSHANA TRANSFORM ResolveGroupingAnalytics", true) {
+          a} // be sure all of the children are resolved.
 
       // Ensure group by expressions and aggregate expressions have been resolved.
-      case Aggregate(Seq(gs: GroupingSet), aggregateExpressions, child)
-        if (gs.groupByExprs ++ aggregateExpressions).forall(_.resolved) =>
-        constructAggregate(gs.selectedGroupByExprs, gs.groupByExprs, aggregateExpressions, child)
+      case Aggregate(Seq(c @ Cube(groupByExprs)), aggregateExpressions, child)
+        if (groupByExprs ++ aggregateExpressions).forall(_.resolved) =>
+        CustomLogger.logMatchTime("DARSHANA TRANSFORM ResolveGroupingAnalytics", true) {
+        constructAggregate(cubeExprs(groupByExprs), groupByExprs, aggregateExpressions, child)}
+      case Aggregate(Seq(r @ Rollup(groupByExprs)), aggregateExpressions, child)
+        if (groupByExprs ++ aggregateExpressions).forall(_.resolved) =>
+        CustomLogger.logMatchTime("DARSHANA TRANSFORM ResolveGroupingAnalytics", true) {
+        constructAggregate(rollupExprs(groupByExprs), groupByExprs, aggregateExpressions, child)}
+      // Ensure all the expressions have been resolved.
+      case x: GroupingSets if x.expressions.forall(_.resolved) =>
+        CustomLogger.logMatchTime("DARSHANA TRANSFORM ResolveGroupingAnalytics", true) {
+        constructAggregate(x.selectedGroupByExprs, x.groupByExprs, x.aggregations, x.child)}
 
       // We should make sure all expressions in condition have been resolved.
       case f @ Filter(cond, child) if hasGroupingFunction(cond) && cond.resolved =>
+        CustomLogger.logMatchTime("DARSHANA TRANSFORM ResolveGroupingAnalytics", true) {
         val groupingExprs = findGroupingExprs(child)
         // The unresolved grouping id will be resolved by ResolveMissingReferences
         val newCond = replaceGroupingFunc(cond, groupingExprs, VirtualColumn.groupingIdAttribute)
-        f.copy(condition = newCond)
+        f.copy(condition = newCond)}
 
       // We should make sure all [[SortOrder]]s have been resolved.
       case s @ Sort(order, _, child)
         if order.exists(hasGroupingFunction) && order.forall(_.resolved) =>
+        CustomLogger.logMatchTime("DARSHANA TRANSFORM ResolveGroupingAnalytics", true) {
         val groupingExprs = findGroupingExprs(child)
         val gid = VirtualColumn.groupingIdAttribute
         // The unresolved grouping id will be resolved by ResolveMissingReferences
         val newOrder = order.map(replaceGroupingFunc(_, groupingExprs, gid).asInstanceOf[SortOrder])
-        s.copy(order = newOrder)
-    }
+        s.copy(order = newOrder)}
+    }}
   }
 
   object ResolvePivot extends Rule[LogicalPlan] {
-    def apply(plan: LogicalPlan): LogicalPlan = plan resolveOperators {
+    def apply(plan: LogicalPlan): LogicalPlan =
+      CustomLogger.logTransformTime("DARSHANA TRANSFORM ResolvePivot") {
+      plan resolveOperators {
       case p: Pivot if !p.childrenResolved || !p.aggregates.forall(_.resolved)
         || (p.groupByExprsOpt.isDefined && !p.groupByExprsOpt.get.forall(_.resolved))
-        || !p.pivotColumn.resolved || !p.pivotValues.forall(_.resolved) => p
+        || !p.pivotColumn.resolved || !p.pivotValues.forall(_.resolved) =>
+        CustomLogger.logMatchTime("DARSHANA Match ResolvePivot", true) {
+        p}
       case Pivot(groupByExprsOpt, pivotColumn, pivotValues, aggregates, child) =>
+        CustomLogger.logMatchTime("DARSHANA Match ResolvePivot", true) {
         if (!RowOrdering.isOrderable(pivotColumn.dataType)) {
           throw QueryCompilationErrors.unorderablePivotColError(pivotColumn)
         }
@@ -790,8 +876,8 @@ class Analyzer(override val catalogManager: CatalogManager)
             }
           }
           Aggregate(groupByExprs, groupByExprs ++ pivotAggregates, child)
-        }
-    }
+        }}
+    }}
 
     // Support any aggregate expression that can appear in an Aggregate plan except Pandas UDF.
     // TODO: Support Pandas UDF.
@@ -807,20 +893,28 @@ class Analyzer(override val catalogManager: CatalogManager)
 
   case class ResolveNamespace(catalogManager: CatalogManager)
     extends Rule[LogicalPlan] with LookupCatalog {
-    def apply(plan: LogicalPlan): LogicalPlan = plan resolveOperators {
+    def apply(plan: LogicalPlan): LogicalPlan =
+      CustomLogger.logTransformTime("DARSHANA TRANSFORM ResolveNamespace") {
+      plan resolveOperators {
       case s @ ShowTables(UnresolvedNamespace(Seq()), _, _) =>
-        s.copy(namespace = ResolvedNamespace(currentCatalog, catalogManager.currentNamespace))
+        CustomLogger.logMatchTime("DARSHANA Match ResolveNamespace", true) {
+        s.copy(namespace = ResolvedNamespace(currentCatalog, catalogManager.currentNamespace))}
       case s @ ShowTableExtended(UnresolvedNamespace(Seq()), _, _, _) =>
-        s.copy(namespace = ResolvedNamespace(currentCatalog, catalogManager.currentNamespace))
+        CustomLogger.logMatchTime("DARSHANA Match ResolveNamespace", true) {
+        s.copy(namespace = ResolvedNamespace(currentCatalog, catalogManager.currentNamespace))}
       case s @ ShowViews(UnresolvedNamespace(Seq()), _, _) =>
-        s.copy(namespace = ResolvedNamespace(currentCatalog, catalogManager.currentNamespace))
+        CustomLogger.logMatchTime("DARSHANA Match ResolveNamespace", true) {
+        s.copy(namespace = ResolvedNamespace(currentCatalog, catalogManager.currentNamespace))}
       case a @ AnalyzeTables(UnresolvedNamespace(Seq()), _) =>
-        a.copy(namespace = ResolvedNamespace(currentCatalog, catalogManager.currentNamespace))
+        CustomLogger.logMatchTime("DARSHANA Match ResolveNamespace", true) {
+        a.copy(namespace = ResolvedNamespace(currentCatalog, catalogManager.currentNamespace))}
       case UnresolvedNamespace(Seq()) =>
-        ResolvedNamespace(currentCatalog, Seq.empty[String])
+        CustomLogger.logMatchTime("DARSHANA Match ResolveNamespace", true) {
+        ResolvedNamespace(currentCatalog, Seq.empty[String])}
       case UnresolvedNamespace(CatalogAndNamespace(catalog, ns)) =>
-        ResolvedNamespace(catalog, ns)
-    }
+        CustomLogger.logMatchTime("DARSHANA Match ResolveNamespace", true) {
+        ResolvedNamespace(catalog, ns)}
+    }}
   }
 
   private def isResolvingView: Boolean = AnalysisContext.get.catalogAndNamespace.nonEmpty
@@ -844,23 +938,30 @@ class Analyzer(override val catalogManager: CatalogManager)
    * [[ResolveTables]] and [[ResolveRelations]].
    */
   object ResolveTempViews extends Rule[LogicalPlan] {
-    def apply(plan: LogicalPlan): LogicalPlan = plan.resolveOperatorsUp {
+    def apply(plan: LogicalPlan): LogicalPlan =
+     CustomLogger.logTransformTime("DARSHANA: TRANSFORM ResolveTempViews") {
+      plan.resolveOperatorsUp {
       case u @ UnresolvedRelation(ident, _, isStreaming) =>
-        lookupAndResolveTempView(ident, isStreaming).getOrElse(u)
+        CustomLogger.logMatchTime("DARSHANA: Match 1 ResolveTempViews", false) {
+        lookupAndResolveTempView(ident, isStreaming).getOrElse(u)}
       case i @ InsertIntoStatement(UnresolvedRelation(ident, _, false), _, _, _, _, _) =>
+        CustomLogger.logMatchTime("DARSHANA: Match 2 ResolveTempViews", false) {
         lookupAndResolveTempView(ident)
           .map(view => i.copy(table = view))
-          .getOrElse(i)
+          .getOrElse(i)}
       case c @ CacheTable(UnresolvedRelation(ident, _, false), _, _, _) =>
+        CustomLogger.logMatchTime("DARSHANA: Match 3 ResolveTempViews", false) {
         lookupAndResolveTempView(ident)
           .map(view => c.copy(table = view))
-          .getOrElse(c)
+          .getOrElse(c)}
       case c @ UncacheTable(UnresolvedRelation(ident, _, false), _, _) =>
+        CustomLogger.logMatchTime("DARSHANA: Match 4 ResolveTempViews", false) {
         lookupAndResolveTempView(ident)
           .map(view => c.copy(table = view, isTempView = true))
-          .getOrElse(c)
+          .getOrElse(c)}
       // TODO (SPARK-27484): handle streaming write commands when we have them.
       case write: V2WriteCommand =>
+        CustomLogger.logMatchTime("DARSHANA: Match 5 ResolveTempViews", false) {
         write.table match {
           case UnresolvedRelation(ident, _, false) =>
             lookupAndResolveTempView(ident).map(unwrapRelationPlan).map {
@@ -868,22 +969,25 @@ class Analyzer(override val catalogManager: CatalogManager)
               case _ => throw QueryCompilationErrors.writeIntoTempViewNotAllowedError(ident.quoted)
             }.getOrElse(write)
           case _ => write
-        }
+        }}
       case u @ UnresolvedTable(ident, cmd, _) =>
+        CustomLogger.logMatchTime("DARSHANA: Match 6 ResolveTempViews", false) {
         lookupTempView(ident).foreach { _ =>
           throw QueryCompilationErrors.expectTableNotViewError(
             ResolvedView(ident.asIdentifier, isTemp = true), cmd, u.relationTypeMismatchHint, u)
         }
-        u
+        u}
       case u @ UnresolvedView(ident, cmd, allowTemp, _) =>
+        CustomLogger.logMatchTime("DARSHANA: Match 6 ResolveTempViews", false) {
         lookupTempView(ident).map { _ =>
           if (!allowTemp) {
             u.failAnalysis(s"${ident.quoted} is a temp view. '$cmd' expects a permanent view.")
           }
           ResolvedView(ident.asIdentifier, isTemp = true)
         }
-        .getOrElse(u)
+        .getOrElse(u)}
       case u @ UnresolvedTableOrView(ident, cmd, allowTempView) =>
+        CustomLogger.logMatchTime("DARSHANA: Match 6 ResolveTempViews", false) {
         lookupTempView(ident)
           .map { _ =>
             if (!allowTempView) {
@@ -892,8 +996,8 @@ class Analyzer(override val catalogManager: CatalogManager)
             }
             ResolvedView(ident.asIdentifier, isTemp = true)
           }
-          .getOrElse(u)
-    }
+          .getOrElse(u)}
+    }}
 
     private def lookupTempView(
         identifier: Seq[String],
@@ -962,8 +1066,11 @@ class Analyzer(override val catalogManager: CatalogManager)
       case _ => plan.withNewChildren(plan.children.map(addMetadataCol))
     }
 
-    def apply(plan: LogicalPlan): LogicalPlan = plan resolveOperatorsUp {
+    def apply(plan: LogicalPlan): LogicalPlan =
+      CustomLogger.logTransformTime("DARSHANA TRANSFORM AddMetadataColumns") {
+      plan resolveOperatorsUp {
       case node if node.children.nonEmpty && node.resolved && hasMetadataCol(node) =>
+        CustomLogger.logMatchTime("DARSHANA Match AddMetadataColumns", true) {
         val inputAttrs = AttributeSet(node.children.flatMap(_.output))
         val metaCols = node.expressions.flatMap(_.collect {
           case a: Attribute if a.isMetadataCol && !inputAttrs.contains(a) => a
@@ -979,8 +1086,8 @@ class Analyzer(override val catalogManager: CatalogManager)
           } else {
             Project(node.output, newNode)
           }
-        }
-    }
+        }}
+    }}
   }
 
   /**
@@ -989,8 +1096,11 @@ class Analyzer(override val catalogManager: CatalogManager)
    * [[ResolveRelations]] still resolves v1 tables.
    */
   object ResolveTables extends Rule[LogicalPlan] {
-    def apply(plan: LogicalPlan): LogicalPlan = ResolveTempViews(plan).resolveOperatorsUp {
+    def apply(plan: LogicalPlan): LogicalPlan =
+      CustomLogger.logTransformTime("DARSHANA TRANSFORM ResolveTables") {
+      ResolveTempViews(plan).resolveOperatorsUp {
       case u: UnresolvedRelation =>
+        CustomLogger.logMatchTime("DARSHANA Match ResolveTables", true) {
         lookupV2Relation(u.multipartIdentifier, u.options, u.isStreaming)
           .map { relation =>
             val (catalog, ident) = relation match {
@@ -998,36 +1108,42 @@ class Analyzer(override val catalogManager: CatalogManager)
               case s: StreamingRelationV2 => (s.catalog, s.identifier.get)
             }
             SubqueryAlias(catalog.get.name +: ident.namespace :+ ident.name, relation)
-          }.getOrElse(u)
+          }.getOrElse(u)}
 
       case u @ UnresolvedTable(NonSessionCatalogAndIdentifier(catalog, ident), _, _) =>
+        CustomLogger.logMatchTime("DARSHANA Match ResolveTables", true) {
         CatalogV2Util.loadTable(catalog, ident)
           .map(table => ResolvedTable.create(catalog.asTableCatalog, ident, table))
-          .getOrElse(u)
+          .getOrElse(u)}
 
       case u @ UnresolvedTableOrView(NonSessionCatalogAndIdentifier(catalog, ident), _, _) =>
+        CustomLogger.logMatchTime("DARSHANA Match ResolveTables", true) {
         CatalogV2Util.loadTable(catalog, ident)
           .map(table => ResolvedTable.create(catalog.asTableCatalog, ident, table))
-          .getOrElse(u)
+          .getOrElse(u)}
 
       case i @ InsertIntoStatement(u @ UnresolvedRelation(_, _, false), _, _, _, _, _)
           if i.query.resolved =>
+        CustomLogger.logMatchTime("DARSHANA Match ResolveTables", true) {
         lookupV2Relation(u.multipartIdentifier, u.options, false)
           .map(v2Relation => i.copy(table = v2Relation))
-          .getOrElse(i)
+          .getOrElse(i)}
 
       case c @ CacheTable(u @ UnresolvedRelation(_, _, false), _, _, _) =>
+        CustomLogger.logMatchTime("DARSHANA Match ResolveTables", true) {
         lookupV2Relation(u.multipartIdentifier, u.options, false)
           .map(v2Relation => c.copy(table = v2Relation))
-          .getOrElse(c)
+          .getOrElse(c)}
 
       case c @ UncacheTable(u @ UnresolvedRelation(_, _, false), _, _) =>
+        CustomLogger.logMatchTime("DARSHANA Match ResolveTables", true) {
         lookupV2Relation(u.multipartIdentifier, u.options, false)
           .map(v2Relation => c.copy(table = v2Relation))
-          .getOrElse(c)
+          .getOrElse(c)}
 
       // TODO (SPARK-27484): handle streaming write commands when we have them.
       case write: V2WriteCommand =>
+        CustomLogger.logMatchTime("DARSHANA Match ResolveTables", true) {
         write.table match {
           case u: UnresolvedRelation if !u.isStreaming =>
             lookupV2Relation(u.multipartIdentifier, u.options, false).map {
@@ -1036,16 +1152,18 @@ class Analyzer(override val catalogManager: CatalogManager)
                 "[BUG] unexpected plan returned by `lookupV2Relation`: " + other)
             }.getOrElse(write)
           case _ => write
-        }
+        }}
 
       case alter @ AlterTable(_, _, u: UnresolvedV2Relation, _) =>
+        CustomLogger.logMatchTime("DARSHANA Match ResolveTables", true) {
         CatalogV2Util.loadRelation(u.catalog, u.tableName)
           .map(rel => alter.copy(table = rel))
-          .getOrElse(alter)
+          .getOrElse(alter)}
 
       case u: UnresolvedV2Relation =>
-        CatalogV2Util.loadRelation(u.catalog, u.tableName).getOrElse(u)
-    }
+        CustomLogger.logMatchTime("DARSHANA Match ResolveTables", true) {
+        CatalogV2Util.loadRelation(u.catalog, u.tableName).getOrElse(u)}
+    }}
 
     /**
      * Performs the lookup of DataSourceV2 Tables from v2 catalog.
@@ -1106,8 +1224,11 @@ class Analyzer(override val catalogManager: CatalogManager)
       case _ => plan
     }
 
-    def apply(plan: LogicalPlan): LogicalPlan = ResolveTempViews(plan).resolveOperatorsUp {
+    def apply(plan: LogicalPlan): LogicalPlan =
+      CustomLogger.logTransformTime("DARSHANA TRANSFORM ResolveRelations") {
+      ResolveTempViews(plan).resolveOperatorsUp {
       case i @ InsertIntoStatement(table, _, _, _, _, _) if i.query.resolved =>
+        CustomLogger.logMatchTime("DARSHANA Match 1 ResolveRelations", true) {
         val relation = table match {
           case u @ UnresolvedRelation(_, _, false) =>
             lookupRelation(u.multipartIdentifier, u.options, false).getOrElse(u)
@@ -1121,24 +1242,27 @@ class Analyzer(override val catalogManager: CatalogManager)
           case v: View =>
             throw QueryCompilationErrors.insertIntoViewNotAllowedError(v.desc.identifier, table)
           case other => i.copy(table = other)
-        }
+        }}
 
       case c @ CacheTable(u @ UnresolvedRelation(_, _, false), _, _, _) =>
+        CustomLogger.logMatchTime("DARSHANA Match 2 ResolveRelations", false) {
         lookupRelation(u.multipartIdentifier, u.options, false)
           .map(resolveViews)
           .map(EliminateSubqueryAliases(_))
           .map(relation => c.copy(table = relation))
-          .getOrElse(c)
+          .getOrElse(c)}
 
       case c @ UncacheTable(u @ UnresolvedRelation(_, _, false), _, _) =>
+        CustomLogger.logMatchTime("DARSHANA Match 3 ResolveRelations", false) {
         lookupRelation(u.multipartIdentifier, u.options, false)
           .map(resolveViews)
           .map(EliminateSubqueryAliases(_))
           .map(relation => c.copy(table = relation))
-          .getOrElse(c)
+          .getOrElse(c)}
 
       // TODO (SPARK-27484): handle streaming write commands when we have them.
       case write: V2WriteCommand =>
+        CustomLogger.logMatchTime("DARSHANA Match 4 ResolveRelations", false) {
         write.table match {
           case u: UnresolvedRelation if !u.isStreaming =>
             lookupRelation(u.multipartIdentifier, u.options, false)
@@ -1154,31 +1278,35 @@ class Analyzer(override val catalogManager: CatalogManager)
                   "[BUG] unexpected plan returned by `lookupRelation`: " + other)
               }.getOrElse(write)
           case _ => write
-        }
+        }}
 
       case u: UnresolvedRelation =>
+        CustomLogger.logMatchTime("DARSHANA Match 5 ResolveRelations", false) {
         lookupRelation(u.multipartIdentifier, u.options, u.isStreaming)
-          .map(resolveViews).getOrElse(u)
+          .map(resolveViews).getOrElse(u)}
 
       case u @ UnresolvedTable(identifier, cmd, relationTypeMismatchHint) =>
+        CustomLogger.logMatchTime("DARSHANA Match 6 ResolveRelations", false) {
         lookupTableOrView(identifier).map {
           case v: ResolvedView =>
             throw QueryCompilationErrors.expectTableNotViewError(
               v, cmd, relationTypeMismatchHint, u)
           case table => table
-        }.getOrElse(u)
+        }.getOrElse(u)}
 
       case u @ UnresolvedView(identifier, cmd, _, relationTypeMismatchHint) =>
+        CustomLogger.logMatchTime("DARSHANA Match 7 ResolveRelations", false) {
         lookupTableOrView(identifier).map {
           case t: ResolvedTable =>
             throw QueryCompilationErrors.expectViewNotTableError(
               t, cmd, relationTypeMismatchHint, u)
           case view => view
-        }.getOrElse(u)
+        }.getOrElse(u)}
 
       case u @ UnresolvedTableOrView(identifier, _, _) =>
-        lookupTableOrView(identifier).getOrElse(u)
-    }
+        CustomLogger.logMatchTime("DARSHANA Match 8 ResolveRelations", false) {
+          lookupTableOrView(identifier).getOrElse(u)}
+    }}
 
     private def lookupTableOrView(identifier: Seq[String]): Option[LogicalPlan] = {
       expandRelationName(identifier) match {
@@ -1249,10 +1377,13 @@ class Analyzer(override val catalogManager: CatalogManager)
   }
 
   object ResolveInsertInto extends Rule[LogicalPlan] {
-    override def apply(plan: LogicalPlan): LogicalPlan = plan resolveOperators {
+    override def apply(plan: LogicalPlan): LogicalPlan =
+      CustomLogger.logTransformTime("DARSHANA TRANSFORM ResolveInsertInto") {
+      plan resolveOperators {
       case i @ InsertIntoStatement(r: DataSourceV2Relation, _, _, _, _, _)
           if i.query.resolved && i.userSpecifiedCols.isEmpty =>
         // ifPartitionNotExists is append with validation, but validation is not supported
+        CustomLogger.logMatchTime("DARSHANA Match ResolveInsertInto", true) {
         if (i.ifPartitionNotExists) {
           throw QueryCompilationErrors.unsupportedIfNotExistsError(r.table.name)
         }
@@ -1269,8 +1400,8 @@ class Analyzer(override val catalogManager: CatalogManager)
           OverwritePartitionsDynamic.byPosition(r, query)
         } else {
           OverwriteByExpression.byPosition(r, query, staticDeleteExpression(r, staticPartitions))
-        }
-    }
+        }}
+    }}
 
     private def partitionColumnNames(table: Table): Seq[String] = {
       // get partition column names. in v2, partition columns are columns that are stored using an
@@ -1488,49 +1619,62 @@ class Analyzer(override val catalogManager: CatalogManager)
       }
     }
 
-    def apply(plan: LogicalPlan): LogicalPlan = plan.resolveOperatorsUp {
-      case p: LogicalPlan if !p.childrenResolved => p
+    def apply(plan: LogicalPlan): LogicalPlan =
+      CustomLogger.logTransformTime("DARSHANA TRANSFORM ResolveReferences") {
+        plan.resolveOperatorsUp {
+      case p: LogicalPlan if !p.childrenResolved =>
+        CustomLogger.logMatchTime("DARSHANA Match 1 ResolveReferences", false) {
+        p}
 
       // If the projection list contains Stars, expand it.
       case p: Project if containsStar(p.projectList) =>
-        p.copy(projectList = buildExpandedProjectList(p.projectList, p.child))
+        CustomLogger.logMatchTime("DARSHANA Match 2 ResolveReferences", true) {
+          p.copy(projectList = buildExpandedProjectList(p.projectList, p.child))}
       // If the aggregate function argument contains Stars, expand it.
       case a: Aggregate if containsStar(a.aggregateExpressions) =>
+        CustomLogger.logMatchTime("DARSHANA Match 3 ResolveReferences", false) {
         if (a.groupingExpressions.exists(_.isInstanceOf[UnresolvedOrdinal])) {
           throw QueryCompilationErrors.starNotAllowedWhenGroupByOrdinalPositionUsedError()
         } else {
           a.copy(aggregateExpressions = buildExpandedProjectList(a.aggregateExpressions, a.child))
-        }
+        }}
       // If the script transformation input contains Stars, expand it.
       case t: ScriptTransformation if containsStar(t.input) =>
+       CustomLogger.logMatchTime("DARSHANA Match 4 ResolveReferences", true) {
         t.copy(
           input = t.input.flatMap {
             case s: Star => s.expand(t.child, resolver)
             case o => o :: Nil
           }
-        )
+        )}
       case g: Generate if containsStar(g.generator.children) =>
-        throw QueryCompilationErrors.invalidStarUsageError("explode/json_tuple/UDTF")
+        CustomLogger.logMatchTime("DARSHANA Match 5 ResolveReferences", false) {
+        throw QueryCompilationErrors.invalidStarUsageError("explode/json_tuple/UDTF")}
 
       // To resolve duplicate expression IDs for Join and Intersect
       case j @ Join(left, right, _, _, _) if !j.duplicateResolved =>
-        j.copy(right = dedupRight(left, right))
+        CustomLogger.logMatchTime("DARSHANA Match 6 ResolveReferences", true) {
+        j.copy(right = dedupRight(left, right))}
       case f @ FlatMapCoGroupsInPandas(leftAttributes, rightAttributes, _, _, left, right) =>
+        CustomLogger.logMatchTime("DARSHANA Match 7 ResolveReferences", true) {
         val leftRes = leftAttributes
           .map(x => resolveExpressionByPlanOutput(x, left).asInstanceOf[Attribute])
         val rightRes = rightAttributes
           .map(x => resolveExpressionByPlanOutput(x, right).asInstanceOf[Attribute])
-        f.copy(leftAttributes = leftRes, rightAttributes = rightRes)
+        f.copy(leftAttributes = leftRes, rightAttributes = rightRes)}
       // intersect/except will be rewritten to join at the beginning of optimizer. Here we need to
       // deduplicate the right side plan, so that we won't produce an invalid self-join later.
       case i @ Intersect(left, right, _) if !i.duplicateResolved =>
-        i.copy(right = dedupRight(left, right))
+        CustomLogger.logMatchTime("DARSHANA Match 8 ResolveReferences", true) {
+        i.copy(right = dedupRight(left, right))}
       case e @ Except(left, right, _) if !e.duplicateResolved =>
-        e.copy(right = dedupRight(left, right))
+        CustomLogger.logMatchTime("DARSHANA Match 9 ResolveReferences", true) {
+        e.copy(right = dedupRight(left, right))}
       // Only after we finish by-name resolution for Union
       case u: Union if !u.byName && !u.duplicateResolved =>
         // Use projection-based de-duplication for Union to avoid breaking the checkpoint sharing
         // feature in streaming.
+        CustomLogger.logMatchTime("DARSHANA Match 10 ResolveReferences", true) {
         val newChildren = u.children.foldRight(Seq.empty[LogicalPlan]) { (head, tail) =>
           head +: tail.map {
             case child if head.outputSet.intersect(child.outputSet).isEmpty =>
@@ -1542,30 +1686,36 @@ class Analyzer(override val catalogManager: CatalogManager)
               Project(projectList, child)
           }
         }
-        u.copy(children = newChildren)
+        u.copy(children = newChildren)}
 
       // When resolve `SortOrder`s in Sort based on child, don't report errors as
       // we still have chance to resolve it based on its descendants
       case s @ Sort(ordering, global, child) if child.resolved && !s.resolved =>
+        CustomLogger.logMatchTime("DARSHANA Match 11 ResolveReferences", true) {
         val newOrdering =
           ordering.map(order => resolveExpressionByPlanOutput(order, child).asInstanceOf[SortOrder])
-        Sort(newOrdering, global, child)
+        Sort(newOrdering, global, child)}
 
       // A special case for Generate, because the output of Generate should not be resolved by
       // ResolveReferences. Attributes in the output will be resolved by ResolveGenerate.
-      case g @ Generate(generator, _, _, _, _, _) if generator.resolved => g
+      case g @ Generate(generator, _, _, _, _, _) if generator.resolved =>
+        CustomLogger.logMatchTime("DARSHANA Match 12 ResolveReferences", false) {
+          g}
 
       case g @ Generate(generator, join, outer, qualifier, output, child) =>
+        CustomLogger.logMatchTime("DARSHANA Match 13 ResolveReferences", true) {
         val newG = resolveExpressionByPlanOutput(generator, child, throws = true)
         if (newG.fastEquals(generator)) {
           g
         } else {
           Generate(newG.asInstanceOf[Generator], join, outer, qualifier, output, child)
-        }
+        }}
 
       // Skips plan which contains deserializer expressions, as they should be resolved by another
       // rule: ResolveDeserializer.
-      case plan if containsDeserializer(plan.expressions) => plan
+      case plan if containsDeserializer(plan.expressions) =>
+        CustomLogger.logMatchTime("DARSHANA Match 14 ResolveReferences", false) {
+          plan}
 
       // SPARK-31670: Resolve Struct field in groupByExpressions and aggregateExpressions
       // with CUBE/ROLLUP will be wrapped with alias like Alias(GetStructField, name) with
@@ -1573,6 +1723,7 @@ class Analyzer(override val catalogManager: CatalogManager)
       // groupByExpressions in `ResolveGroupingAnalytics.constructAggregateExprs()`, we trim
       // unnecessary alias of GetStructField here.
       case a: Aggregate =>
+        CustomLogger.logMatchTime("DARSHANA Match 15 ResolveReferences", true) {
         val planForResolve = a.child match {
           // SPARK-25942: Resolves aggregate expressions with `AppendColumns`'s children, instead of
           // `AppendColumns`, because `AppendColumns`'s serializer might produce conflict attribute
@@ -1589,19 +1740,42 @@ class Analyzer(override val catalogManager: CatalogManager)
           .map(resolveExpressionByPlanChildren(_, planForResolve))
             .map(_.asInstanceOf[NamedExpression])
 
-        a.copy(resolvedGroupingExprs, resolvedAggExprs, a.child)
+        a.copy(resolvedGroupingExprs, resolvedAggExprs, a.child)}
+
+      // SPARK-31670: Resolve Struct field in selectedGroupByExprs/groupByExprs and aggregations
+      // will be wrapped with alias like Alias(GetStructField, name) with different ExprId.
+      // This cause aggregateExpressions can't be replaced by expanded groupByExpressions in
+      // `ResolveGroupingAnalytics.constructAggregateExprs()`, we trim unnecessary alias
+      // of GetStructField here.
+      case g: GroupingSets =>
+        CustomLogger.logMatchTime("DARSHANA Match 16 ResolveReferences", true) {
+        val resolvedSelectedExprs = g.selectedGroupByExprs
+          .map(_.map(resolveExpressionByPlanChildren(_, g))
+            .map(trimTopLevelGetStructFieldAlias))
+
+        val resolvedGroupingExprs = g.groupByExprs
+          .map(resolveExpressionByPlanChildren(_, g))
+          .map(trimTopLevelGetStructFieldAlias)
+
+        val resolvedAggExprs = g.aggregations
+          .map(resolveExpressionByPlanChildren(_, g))
+            .map(_.asInstanceOf[NamedExpression])
+
+        g.copy(resolvedSelectedExprs, resolvedGroupingExprs, g.child, resolvedAggExprs)}
 
       case o: OverwriteByExpression if o.table.resolved =>
         // The delete condition of `OverwriteByExpression` will be passed to the table
         // implementation and should be resolved based on the table schema.
-        o.copy(deleteExpr = resolveExpressionByPlanOutput(o.deleteExpr, o.table))
+        CustomLogger.logMatchTime("DARSHANA Match 17 ResolveReferences", true) {
+          o.copy(deleteExpr = resolveExpressionByPlanOutput(o.deleteExpr, o.table))}
 
       case m @ MergeIntoTable(targetTable, sourceTable, _, _, _) if !m.duplicateResolved =>
-        m.copy(sourceTable = dedupRight(targetTable, sourceTable))
+        CustomLogger.logMatchTime("DARSHANA Match 18 ResolveReferences", true) {
+          m.copy(sourceTable = dedupRight(targetTable, sourceTable))}
 
       case m @ MergeIntoTable(targetTable, sourceTable, _, _, _)
         if !m.resolved && targetTable.resolved && sourceTable.resolved =>
-
+        CustomLogger.logMatchTime("DARSHANA Match 19 ResolveReferences", true) {
         EliminateSubqueryAliases(targetTable) match {
           case r: NamedRelation if r.skipSchemaResolution =>
             // Do not resolve the expression if the target table accepts any schema.
@@ -1639,15 +1813,18 @@ class Analyzer(override val catalogManager: CatalogManager)
             m.copy(mergeCondition = resolvedMergeCondition,
               matchedActions = newMatchedActions,
               notMatchedActions = newNotMatchedActions)
-        }
+        }}
 
       // Skip the having clause here, this will be handled in ResolveAggregateFunctions.
-      case h: UnresolvedHaving => h
+      case h: UnresolvedHaving =>
+        CustomLogger.logMatchTime("DARSHANA Match 20 ResolveReferences", false) {
+          h}
 
       case q: LogicalPlan =>
-        logTrace(s"Attempting to resolve ${q.simpleString(conf.maxToStringFields)}")
-        q.mapExpressions(resolveExpressionByPlanChildren(_, q))
-    }
+        CustomLogger.logMatchTime("DARSHANA Match 21 ResolveReferences", true) {
+          logTrace(s"Attempting to resolve ${q.simpleString(conf.maxToStringFields)}")
+        q.mapExpressions(resolveExpressionByPlanChildren(_, q))}
+    }}
 
     def resolveAssignments(
         assignments: Seq[Assignment],
@@ -1814,27 +1991,13 @@ class Analyzer(override val catalogManager: CatalogManager)
   private def resolveExpression(
       expr: Expression,
       resolveColumnByName: Seq[String] => Option[Expression],
-      getAttrCandidates: () => Seq[Attribute],
+      resolveColumnByOrdinal: Int => Attribute,
       throws: Boolean): Expression = {
     def innerResolve(e: Expression, isTopLevel: Boolean): Expression = {
       if (e.resolved) return e
       e match {
         case f: LambdaFunction if !f.bound => f
-
-        case GetColumnByOrdinal(ordinal, _) =>
-          val attrCandidates = getAttrCandidates()
-          assert(ordinal >= 0 && ordinal < attrCandidates.length)
-          attrCandidates(ordinal)
-
-        case GetViewColumnByNameAndOrdinal(viewName, colName, ordinal, expectedNumCandidates) =>
-          val attrCandidates = getAttrCandidates()
-          val matched = attrCandidates.filter(a => resolver(a.name, colName))
-          if (matched.length != expectedNumCandidates) {
-            throw QueryCompilationErrors.incompatibleViewSchemaChange(
-              viewName, colName, expectedNumCandidates, matched)
-          }
-          matched(ordinal)
-
+        case GetColumnByOrdinal(ordinal, _) => resolveColumnByOrdinal(ordinal)
         case u @ UnresolvedAttribute(nameParts) =>
           val result = withPosition(u) {
             resolveColumnByName(nameParts).orElse(resolveLiteralFunction(nameParts)).map {
@@ -1848,7 +2011,6 @@ class Analyzer(override val catalogManager: CatalogManager)
           }
           logDebug(s"Resolving $u to $result")
           result
-
         case u @ UnresolvedExtractValue(child, fieldName) =>
           val newChild = innerResolve(child, isTopLevel = false)
           if (newChild.resolved) {
@@ -1856,7 +2018,6 @@ class Analyzer(override val catalogManager: CatalogManager)
           } else {
             u.copy(child = newChild)
           }
-
         case _ => e.mapChildren(innerResolve(_, isTopLevel = false))
       }
     }
@@ -1889,7 +2050,10 @@ class Analyzer(override val catalogManager: CatalogManager)
       resolveColumnByName = nameParts => {
         plan.resolve(nameParts, resolver)
       },
-      getAttrCandidates = () => plan.output,
+      resolveColumnByOrdinal = ordinal => {
+        assert(ordinal >= 0 && ordinal < plan.output.length)
+        plan.output(ordinal)
+      },
       throws = throws)
   }
 
@@ -1909,9 +2073,10 @@ class Analyzer(override val catalogManager: CatalogManager)
       resolveColumnByName = nameParts => {
         q.resolveChildren(nameParts, resolver)
       },
-      getAttrCandidates = () => {
+      resolveColumnByOrdinal = ordinal => {
         assert(q.children.length == 1)
-        q.children.head.output
+        assert(ordinal >= 0 && ordinal < q.children.head.output.length)
+        q.children.head.output(ordinal)
       },
       throws = true)
   }
@@ -1930,12 +2095,17 @@ class Analyzer(override val catalogManager: CatalogManager)
    * have no effect on the results.
    */
   object ResolveOrdinalInOrderByAndGroupBy extends Rule[LogicalPlan] {
-    def apply(plan: LogicalPlan): LogicalPlan = plan.resolveOperatorsUp {
-      case p if !p.childrenResolved => p
+    def apply(plan: LogicalPlan): LogicalPlan =
+      CustomLogger.logTransformTime("DARSHANA TRANSFORM ResolveOrdinalInOrderByAndGroupBy") {
+      plan.resolveOperatorsUp {
+      case p if !p.childrenResolved =>
+        CustomLogger.logMatchTime("DARSHANA Match ResolveOrdinalInOrderByAndGroupBy", true) {
+        p}
       // Replace the index with the related attribute for ORDER BY,
       // which is a 1-base position of the projection list.
       case Sort(orders, global, child)
         if orders.exists(_.child.isInstanceOf[UnresolvedOrdinal]) =>
+        CustomLogger.logMatchTime("DARSHANA Match ResolveOrdinalInOrderByAndGroupBy", true) {
         val newOrders = orders map {
           case s @ SortOrder(UnresolvedOrdinal(index), direction, nullOrdering, _) =>
             if (index > 0 && index <= child.output.size) {
@@ -1945,12 +2115,13 @@ class Analyzer(override val catalogManager: CatalogManager)
             }
           case o => o
         }
-        Sort(newOrders, global, child)
+        Sort(newOrders, global, child)}
 
       // Replace the index with the corresponding expression in aggregateExpressions. The index is
       // a 1-base position of aggregateExpressions, which is output columns (select expression)
       case Aggregate(groups, aggs, child) if aggs.forall(_.resolved) &&
         groups.exists(_.isInstanceOf[UnresolvedOrdinal]) =>
+        CustomLogger.logMatchTime("DARSHANA Match ResolveOrdinalInOrderByAndGroupBy", true) {
         val newGroups = groups.map {
           case u @ UnresolvedOrdinal(index) if index > 0 && index <= aggs.size =>
             aggs(index - 1)
@@ -1958,8 +2129,8 @@ class Analyzer(override val catalogManager: CatalogManager)
             throw QueryCompilationErrors.groupByPositionRangeError(index, aggs.size, ordinal)
           case o => o
         }
-        Aggregate(newGroups, aggs, child)
-    }
+        Aggregate(newGroups, aggs, child)}
+    }}
   }
 
   /**
@@ -1982,12 +2153,23 @@ class Analyzer(override val catalogManager: CatalogManager)
       }}
     }
 
-    override def apply(plan: LogicalPlan): LogicalPlan = plan.resolveOperatorsUp {
+    override def apply(plan: LogicalPlan): LogicalPlan =
+      CustomLogger.logTransformTime("DARSHANA TRANSFORM ResolveAggAliasInGroupBy") {
+      plan.resolveOperatorsUp {
       case agg @ Aggregate(groups, aggs, child)
           if conf.groupByAliases && child.resolved && aggs.forall(_.resolved) &&
             groups.exists(!_.resolved) =>
-        agg.copy(groupingExpressions = mayResolveAttrByAggregateExprs(groups, aggs, child))
-    }
+        CustomLogger.logMatchTime("DARSHANA Match ResolveAggAliasInGroupBy", true) {
+        agg.copy(groupingExpressions = mayResolveAttrByAggregateExprs(groups, aggs, child))}
+
+      case gs @ GroupingSets(selectedGroups, groups, child, aggs)
+          if conf.groupByAliases && child.resolved && aggs.forall(_.resolved) &&
+            groups.exists(_.isInstanceOf[UnresolvedAttribute]) =>
+        CustomLogger.logMatchTime("DARSHANA Match ResolveAggAliasInGroupBy", true) {
+        gs.copy(
+          selectedGroupByExprs = selectedGroups.map(mayResolveAttrByAggregateExprs(_, aggs, child)),
+          groupByExprs = mayResolveAttrByAggregateExprs(groups, aggs, child))}
+    }}
   }
 
   /**
@@ -1999,12 +2181,17 @@ class Analyzer(override val catalogManager: CatalogManager)
    * The HAVING clause could also used a grouping columns that is not presented in the SELECT.
    */
   object ResolveMissingReferences extends Rule[LogicalPlan] {
-    def apply(plan: LogicalPlan): LogicalPlan = plan.resolveOperatorsUp {
+    def apply(plan: LogicalPlan): LogicalPlan =
+      CustomLogger.logTransformTime("DARSHANA TRANSFORM ResolveMissingReferences") {
+      plan.resolveOperatorsUp {
       // Skip sort with aggregate. This will be handled in ResolveAggregateFunctions
-      case sa @ Sort(_, _, child: Aggregate) => sa
+      case sa @ Sort(_, _, child: Aggregate) =>
+        CustomLogger.logMatchTime("DARSHANA Match ResolveMissingReferences", true) {
+        sa}
 
       case s @ Sort(order, _, child)
           if (!s.resolved || s.missingInput.nonEmpty) && child.resolved =>
+        CustomLogger.logMatchTime("DARSHANA Match ResolveMissingReferences", true) {
         val (newOrder, newChild) = resolveExprsAndAddMissingAttrs(order, child)
         val ordering = newOrder.map(_.asInstanceOf[SortOrder])
         if (child.output == newChild.output) {
@@ -2013,9 +2200,10 @@ class Analyzer(override val catalogManager: CatalogManager)
           // Add missing attributes and then project them away.
           val newSort = s.copy(order = ordering, child = newChild)
           Project(child.output, newSort)
-        }
+        }}
 
       case f @ Filter(cond, child) if (!f.resolved || f.missingInput.nonEmpty) && child.resolved =>
+        CustomLogger.logMatchTime("DARSHANA Match ResolveMissingReferences", true) {
         val (newCond, newChild) = resolveExprsAndAddMissingAttrs(Seq(cond), child)
         if (child.output == newChild.output) {
           f.copy(condition = newCond.head)
@@ -2023,8 +2211,8 @@ class Analyzer(override val catalogManager: CatalogManager)
           // Add missing attributes and then project them away.
           val newFilter = Filter(newCond.head, newChild)
           Project(child.output, newFilter)
-        }
-    }
+        }}
+    }}
 
     /**
      * This method tries to resolve expressions and find missing attributes recursively. Specially,
@@ -2096,20 +2284,25 @@ class Analyzer(override val catalogManager: CatalogManager)
   object LookupFunctions extends Rule[LogicalPlan] {
     override def apply(plan: LogicalPlan): LogicalPlan = {
       val externalFunctionNameSet = new mutable.HashSet[FunctionIdentifier]()
+      CustomLogger.logTransformTime("DARSHANA TRANSFORM LookupFunctions") {
       plan.resolveExpressions {
         case f: UnresolvedFunction
-          if externalFunctionNameSet.contains(normalizeFuncName(f.name)) => f
-        case f: UnresolvedFunction if v1SessionCatalog.isRegisteredFunction(f.name) => f
+          if externalFunctionNameSet.contains(normalizeFuncName(f.name)) =>
+          CustomLogger.logMatchTime("DARSHANA Match LookupFunctions", true) {f}
+        case f: UnresolvedFunction if v1SessionCatalog.isRegisteredFunction(f.name) =>
+          CustomLogger.logMatchTime("DARSHANA Match LookupFunctions", true) {f}
         case f: UnresolvedFunction if v1SessionCatalog.isPersistentFunction(f.name) =>
+          CustomLogger.logMatchTime("DARSHANA Match LookupFunctions", true) {
           externalFunctionNameSet.add(normalizeFuncName(f.name))
-          f
+          f}
         case f: UnresolvedFunction =>
+          CustomLogger.logMatchTime("DARSHANA Match LookupFunctions", true) {
           withPosition(f) {
             throw new NoSuchFunctionException(
               f.name.database.getOrElse(v1SessionCatalog.getCurrentDatabase),
               f.name.funcName)
-          }
-      }
+          }}
+      }}
     }
 
     def normalizeFuncName(name: FunctionIdentifier): FunctionIdentifier = {
@@ -2138,13 +2331,17 @@ class Analyzer(override val catalogManager: CatalogManager)
    */
   object ResolveFunctions extends Rule[LogicalPlan] {
     val trimWarningEnabled = new AtomicBoolean(true)
-    def apply(plan: LogicalPlan): LogicalPlan = plan.resolveOperatorsUp {
+    def apply(plan: LogicalPlan): LogicalPlan =
+      CustomLogger.logTransformTime("DARSHANA TRANSFORM ResolveFunctions") {
+      plan.resolveOperatorsUp {
       // Resolve functions with concrete relations from v2 catalog.
       case UnresolvedFunc(multipartIdent) =>
+        CustomLogger.logMatchTime("DARSHANA Match ResolveFunctions", true) {
         val funcIdent = parseSessionCatalogFunctionIdentifier(multipartIdent)
-        ResolvedFunc(Identifier.of(funcIdent.database.toArray, funcIdent.funcName))
+        ResolvedFunc(Identifier.of(funcIdent.database.toArray, funcIdent.funcName))}
 
       case q: LogicalPlan =>
+        CustomLogger.logMatchTime("DARSHANA Match ResolveFunctions", true) {
         q transformExpressions {
           case u if !u.childrenResolved => u // Skip until children are resolved.
           case u @ UnresolvedGenerator(name, children) =>
@@ -2235,8 +2432,8 @@ class Analyzer(override val catalogManager: CatalogManager)
                   other
               }
             }
-        }
-    }
+        }}
+    }}
   }
 
   /**
@@ -2333,19 +2530,25 @@ class Analyzer(override val catalogManager: CatalogManager)
     /**
      * Resolve and rewrite all subqueries in an operator tree..
      */
-    def apply(plan: LogicalPlan): LogicalPlan = plan.resolveOperatorsUp {
+    def apply(plan: LogicalPlan): LogicalPlan =
+      CustomLogger.logTransformTime("DARSHANA TRANSFORM ResolveSubquery") {
+      plan.resolveOperatorsUp {
       // In case of HAVING (a filter after an aggregate) we use both the aggregate and
       // its child for resolution.
       case f @ Filter(_, a: Aggregate) if f.childrenResolved =>
-        resolveSubQueries(f, Seq(a, a.child))
+        CustomLogger.logMatchTime("DARSHANA Match ResolveSubquery", true) {
+        resolveSubQueries(f, Seq(a, a.child))}
       // Only a few unary nodes (Project/Filter/Aggregate) can contain subqueries.
       case q: UnaryNode if q.childrenResolved =>
-        resolveSubQueries(q, q.children)
+        CustomLogger.logMatchTime("DARSHANA Match ResolveSubquery", true) {
+        resolveSubQueries(q, q.children)}
       case j: Join if j.childrenResolved =>
-        resolveSubQueries(j, Seq(j, j.left, j.right))
+        CustomLogger.logMatchTime("DARSHANA Match ResolveSubquery", true) {
+        resolveSubQueries(j, Seq(j, j.left, j.right))}
       case s: SupportsSubquery if s.childrenResolved =>
-        resolveSubQueries(s, s.children)
-    }
+        CustomLogger.logMatchTime("DARSHANA Match ResolveSubquery", true) {
+        resolveSubQueries(s, s.children)}
+    }}
   }
 
   /**
@@ -2353,10 +2556,13 @@ class Analyzer(override val catalogManager: CatalogManager)
    */
   object ResolveSubqueryColumnAliases extends Rule[LogicalPlan] {
 
-     def apply(plan: LogicalPlan): LogicalPlan = plan.resolveOperatorsUp {
+     def apply(plan: LogicalPlan): LogicalPlan =
+      CustomLogger.logTransformTime("DARSHANA TRANSFORM ResolveSubqueryColumnAliases") {
+      plan.resolveOperatorsUp {
       case u @ UnresolvedSubqueryColumnAliases(columnNames, child) if child.resolved =>
         // Resolves output attributes if a query has alias names in its subquery:
         // e.g., SELECT * FROM (SELECT 1 AS a, 1 AS b) t(col1, col2)
+        CustomLogger.logMatchTime("DARSHANA Match ResolveSubqueryColumnAliases", true) {
         val outputAttrs = child.output
         // Checks if the number of the aliases equals to the number of output columns
         // in the subquery.
@@ -2367,18 +2573,21 @@ class Analyzer(override val catalogManager: CatalogManager)
         val aliases = outputAttrs.zip(columnNames).map { case (attr, aliasName) =>
           Alias(attr, aliasName)()
         }
-        Project(aliases, child)
-    }
+        Project(aliases, child)}
+    }}
   }
 
   /**
    * Turns projections that contain aggregate expressions into aggregations.
    */
   object GlobalAggregates extends Rule[LogicalPlan] {
-    def apply(plan: LogicalPlan): LogicalPlan = plan.resolveOperators {
+    def apply(plan: LogicalPlan): LogicalPlan =
+      CustomLogger.logTransformTime("DARSHANA TRANSFORM GlobalAggregates") {
+      plan.resolveOperators {
       case Project(projectList, child) if containsAggregates(projectList) =>
-        Aggregate(Nil, projectList, child)
-    }
+        CustomLogger.logMatchTime("DARSHANA Match GlobalAggregates", true) {
+        Aggregate(Nil, projectList, child)}
+    }}
 
     def containsAggregates(exprs: Seq[Expression]): Boolean = {
       // Collect all Windowed Aggregate Expressions.
@@ -2404,19 +2613,24 @@ class Analyzer(override val catalogManager: CatalogManager)
    * underlying aggregate operator and then projected away after the original operator.
    */
   object ResolveAggregateFunctions extends Rule[LogicalPlan] with AliasHelper {
-    def apply(plan: LogicalPlan): LogicalPlan = plan.resolveOperatorsUp {
+    def apply(plan: LogicalPlan): LogicalPlan =
+      CustomLogger.logTransformTime("DARSHANA TRANSFORM ResolveAggregateFunctions") {
+      plan.resolveOperatorsUp {
       // Resolve aggregate with having clause to Filter(..., Aggregate()). Note, to avoid wrongly
       // resolve the having condition expression, here we skip resolving it in ResolveReferences
       // and transform it to Filter after aggregate is resolved. See more details in SPARK-31519.
       case UnresolvedHaving(cond, agg: Aggregate) if agg.resolved =>
-        resolveHaving(Filter(cond, agg), agg)
+        CustomLogger.logMatchTime("DARSHANA Match ResolveAggregateFunctions", true) {
+        resolveHaving(Filter(cond, agg), agg)}
 
       case f @ Filter(_, agg: Aggregate) if agg.resolved =>
-        resolveHaving(f, agg)
+        CustomLogger.logMatchTime("DARSHANA Match ResolveAggregateFunctions", true) {
+        resolveHaving(f, agg)}
 
       case sort @ Sort(sortOrder, global, aggregate: Aggregate) if aggregate.resolved =>
 
         // Try resolving the ordering as though it is in the aggregate clause.
+        CustomLogger.logMatchTime("DARSHANA Match ResolveAggregateFunctions", true) {
         try {
           // If a sort order is unresolved, containing references not in aggregate, or containing
           // `AggregateExpression`, we need to push down it to the underlying aggregate operator.
@@ -2486,8 +2700,8 @@ class Analyzer(override val catalogManager: CatalogManager)
           // Attempting to resolve in the aggregate can result in ambiguity.  When this happens,
           // just return the original plan.
           case ae: AnalysisException => sort
-        }
-    }
+        }}
+    }}
 
     def hasCharVarchar(expr: Alias): Boolean = {
       expr.find {
@@ -2636,28 +2850,35 @@ class Analyzer(override val catalogManager: CatalogManager)
       }
     }
 
-    def apply(plan: LogicalPlan): LogicalPlan = plan.resolveOperatorsUp {
+    def apply(plan: LogicalPlan): LogicalPlan =
+      CustomLogger.logTransformTime("DARSHANA TRANSFORM ExtractGenerator") {
+      plan.resolveOperatorsUp {
       case Project(projectList, _) if projectList.exists(hasNestedGenerator) =>
+        CustomLogger.logMatchTime("DARSHANA Match ExtractGenerator", true) {
         val nestedGenerator = projectList.find(hasNestedGenerator).get
-        throw QueryCompilationErrors.nestedGeneratorError(trimAlias(nestedGenerator))
+        throw QueryCompilationErrors.nestedGeneratorError(trimAlias(nestedGenerator))}
 
       case Project(projectList, _) if projectList.count(hasGenerator) > 1 =>
+        CustomLogger.logMatchTime("DARSHANA Match ExtractGenerator", true) {
         val generators = projectList.filter(hasGenerator).map(trimAlias)
-        throw QueryCompilationErrors.moreThanOneGeneratorError(generators, "select")
+        throw QueryCompilationErrors.moreThanOneGeneratorError(generators, "select")}
 
       case Aggregate(_, aggList, _) if aggList.exists(hasNestedGenerator) =>
+        CustomLogger.logMatchTime("DARSHANA Match ExtractGenerator", true) {
         val nestedGenerator = aggList.find(hasNestedGenerator).get
-        throw QueryCompilationErrors.nestedGeneratorError(trimAlias(nestedGenerator))
+        throw QueryCompilationErrors.nestedGeneratorError(trimAlias(nestedGenerator))}
 
       case Aggregate(_, aggList, _) if aggList.count(hasGenerator) > 1 =>
+        CustomLogger.logMatchTime("DARSHANA Match ExtractGenerator", true) {
         val generators = aggList.filter(hasGenerator).map(trimAlias)
-        throw QueryCompilationErrors.moreThanOneGeneratorError(generators, "aggregate")
+        throw QueryCompilationErrors.moreThanOneGeneratorError(generators, "aggregate")}
 
       case agg @ Aggregate(groupList, aggList, child) if aggList.forall {
           case AliasedGenerator(_, _, _) => true
           case other => other.resolved
         } && aggList.exists(hasGenerator) =>
         // If generator in the aggregate list was visited, set the boolean flag true.
+        CustomLogger.logMatchTime("DARSHANA Match ExtractGenerator", true) {
         var generatorVisited = false
 
         val projectExprs = Array.ofDim[NamedExpression](aggList.length)
@@ -2693,14 +2914,16 @@ class Analyzer(override val catalogManager: CatalogManager)
           }
 
         val newAgg = Aggregate(groupList, newAggList, child)
-        Project(projectExprs.toList, newAgg)
+        Project(projectExprs.toList, newAgg)}
 
       case p @ Project(projectList, _) if hasAggFunctionInGenerator(projectList) =>
         // If a generator has any aggregate function, we need to apply the `GlobalAggregates` rule
         // first for replacing `Project` with `Aggregate`.
-        p
+        CustomLogger.logMatchTime("DARSHANA Match ExtractGenerator", true) {
+        p}
 
       case p @ Project(projectList, child) =>
+        CustomLogger.logMatchTime("DARSHANA Match ExtractGenerator", true) {
         val (resolvedGenerator, newProjectList) = projectList
           .map(trimNonTopLevelAliases)
           .foldLeft((None: Option[Generate], Nil: Seq[NamedExpression])) { (res, e) =>
@@ -2728,13 +2951,15 @@ class Analyzer(override val catalogManager: CatalogManager)
           Project(newProjectList, resolvedGenerator.get)
         } else {
           p
-        }
+        }}
 
-      case g: Generate => g
+      case g: Generate =>
+        CustomLogger.logMatchTime("DARSHANA Match ExtractGenerator", true) {g}
 
       case p if p.expressions.exists(hasGenerator) =>
-        throw QueryCompilationErrors.generatorOutsideSelectError(p)
-    }
+       CustomLogger.logMatchTime("DARSHANA Match ExtractGenerator", true) {
+        throw QueryCompilationErrors.generatorOutsideSelectError(p)}
+    }}
   }
 
   /**
@@ -2747,11 +2972,16 @@ class Analyzer(override val catalogManager: CatalogManager)
    * that wrap the [[Generator]].
    */
   object ResolveGenerate extends Rule[LogicalPlan] {
-    def apply(plan: LogicalPlan): LogicalPlan = plan.resolveOperatorsUp {
-      case g: Generate if !g.child.resolved || !g.generator.resolved => g
+    def apply(plan: LogicalPlan): LogicalPlan =
+      CustomLogger.logTransformTime("DARSHANA TRANSFORM ResolveGenerate") {
+      plan.resolveOperatorsUp {
+      case g: Generate if !g.child.resolved || !g.generator.resolved =>
+        CustomLogger.logMatchTime("DARSHANA Match ResolveGenerate", true) {
+        g}
       case g: Generate if !g.resolved =>
-        g.copy(generatorOutput = makeGeneratorOutput(g.generator, g.generatorOutput.map(_.name)))
-    }
+        CustomLogger.logMatchTime("DARSHANA Match ResolveGenerate", true) {
+        g.copy(generatorOutput = makeGeneratorOutput(g.generator, g.generatorOutput.map(_.name)))}
+    }}
 
     /**
      * Construct the output attributes for a [[Generator]], given a list of names.  If the list of
@@ -2986,13 +3216,17 @@ class Analyzer(override val catalogManager: CatalogManager)
 
     // We have to use transformDown at here to make sure the rule of
     // "Aggregate with Having clause" will be triggered.
-    def apply(plan: LogicalPlan): LogicalPlan = plan resolveOperatorsDown {
+    def apply(plan: LogicalPlan): LogicalPlan =
+      CustomLogger.logTransformTime("DARSHANA TRANSFORM ExtractWindowExpressions") {
+      plan resolveOperatorsDown {
 
       case Filter(condition, _) if hasWindowFunction(condition) =>
-        throw QueryCompilationErrors.windowFunctionNotAllowedError("WHERE")
+        CustomLogger.logMatchTime("DARSHANA Match ExtractWindowExpressions", true) {
+        throw QueryCompilationErrors.windowFunctionNotAllowedError("WHERE")}
 
       case UnresolvedHaving(condition, _) if hasWindowFunction(condition) =>
-        throw QueryCompilationErrors.windowFunctionNotAllowedError("HAVING")
+        CustomLogger.logMatchTime("DARSHANA Match ExtractWindowExpressions", true) {
+        throw QueryCompilationErrors.windowFunctionNotAllowedError("HAVING")}
 
       // Aggregate with Having clause. This rule works with an unresolved Aggregate because
       // a resolved Aggregate will not have Window Functions.
@@ -3000,6 +3234,7 @@ class Analyzer(override val catalogManager: CatalogManager)
         if child.resolved &&
           hasWindowFunction(aggregateExprs) &&
           a.expressions.forall(_.resolved) =>
+        CustomLogger.logMatchTime("DARSHANA Match ExtractWindowExpressions", true) {
         val (windowExpressions, aggregateExpressions) = extract(aggregateExprs)
         // Create an Aggregate operator to evaluate aggregation functions.
         val withAggregate = Aggregate(groupingExprs, aggregateExpressions, child)
@@ -3009,14 +3244,16 @@ class Analyzer(override val catalogManager: CatalogManager)
 
         // Finally, generate output columns according to the original projectList.
         val finalProjectList = aggregateExprs.map(_.toAttribute)
-        Project(finalProjectList, withWindow)
+        Project(finalProjectList, withWindow)}
 
-      case p: LogicalPlan if !p.childrenResolved => p
+      case p: LogicalPlan if !p.childrenResolved =>
+        CustomLogger.logMatchTime("DARSHANA Match ExtractWindowExpressions", true) {p}
 
       // Aggregate without Having clause.
       case a @ Aggregate(groupingExprs, aggregateExprs, child)
         if hasWindowFunction(aggregateExprs) &&
           a.expressions.forall(_.resolved) =>
+        CustomLogger.logMatchTime("DARSHANA Match ExtractWindowExpressions", true) {
         val (windowExpressions, aggregateExpressions) = extract(aggregateExprs)
         // Create an Aggregate operator to evaluate aggregation functions.
         val withAggregate = Aggregate(groupingExprs, aggregateExpressions, child)
@@ -3025,12 +3262,13 @@ class Analyzer(override val catalogManager: CatalogManager)
 
         // Finally, generate output columns according to the original projectList.
         val finalProjectList = aggregateExprs.map(_.toAttribute)
-        Project(finalProjectList, withWindow)
+        Project(finalProjectList, withWindow)}
 
       // We only extract Window Expressions after all expressions of the Project
       // have been resolved.
       case p @ Project(projectList, child)
         if hasWindowFunction(projectList) && !p.expressions.exists(!_.resolved) =>
+        CustomLogger.logMatchTime("DARSHANA Match ExtractWindowExpressions", true) {
         val (windowExpressions, regularExpressions) = extract(projectList)
         // We add a project to get all needed expressions for window expressions from the child
         // of the original Project operator.
@@ -3040,8 +3278,8 @@ class Analyzer(override val catalogManager: CatalogManager)
 
         // Finally, generate output columns according to the original projectList.
         val finalProjectList = projectList.map(_.toAttribute)
-        Project(finalProjectList, withWindow)
-    }
+        Project(finalProjectList, withWindow)}
+    }}
   }
 
   /**
@@ -3050,13 +3288,19 @@ class Analyzer(override val catalogManager: CatalogManager)
   object ResolveRandomSeed extends Rule[LogicalPlan] {
     private lazy val random = new Random()
 
-    override def apply(plan: LogicalPlan): LogicalPlan = plan.resolveOperatorsUp {
-      case p if p.resolved => p
-      case p => p transformExpressionsUp {
+    override def apply(plan: LogicalPlan): LogicalPlan =
+      CustomLogger.logTransformTime("DARSHANA TRANSFORM ResolveRandomSeed") {
+      plan.resolveOperatorsUp {
+      case p if p.resolved =>
+        CustomLogger.logMatchTime("DARSHANA Match ResolveRandomSeed", true) {
+        p}
+      case p =>
+        CustomLogger.logMatchTime("DARSHANA Match ResolveRandomSeed", true) {
+        p transformExpressionsUp {
         case e: ExpressionWithRandomSeed if e.seedExpression == UnresolvedSeed =>
           e.withNewSeed(random.nextLong())
-      }
-    }
+      }}
+    }}
   }
 
   /**
@@ -3066,10 +3310,16 @@ class Analyzer(override val catalogManager: CatalogManager)
    * and we should return null if the input is null.
    */
   object HandleNullInputsForUDF extends Rule[LogicalPlan] {
-    override def apply(plan: LogicalPlan): LogicalPlan = plan.resolveOperatorsUp {
-      case p if !p.resolved => p // Skip unresolved nodes.
+    override def apply(plan: LogicalPlan): LogicalPlan =
+      CustomLogger.logTransformTime("DARSHANA TRANSFORM HandleNullInputsForUDF") {
+      plan.resolveOperatorsUp {
+      case p if !p.resolved =>
+        CustomLogger.logMatchTime("DARSHANA Match HandleNullInputsForUDF", true) {
+        p} // Skip unresolved nodes.
 
-      case p => p transformExpressionsUp {
+      case p =>
+        CustomLogger.logMatchTime("DARSHANA Match HandleNullInputsForUDF", true) {
+        p transformExpressionsUp {
 
         case udf: ScalaUDF if udf.inputPrimitives.contains(true) =>
           // Otherwise, add special handling of null for fields that can't accept null.
@@ -3100,8 +3350,8 @@ class Analyzer(override val catalogManager: CatalogManager)
           } else {
             udf
           }
-      }
-    }
+      }}
+    }}
   }
 
   /**
@@ -3114,10 +3364,16 @@ class Analyzer(override val catalogManager: CatalogManager)
    * The resolved encoders then will be used to deserialize the internal row to Scala value.
    */
   object ResolveEncodersInUDF extends Rule[LogicalPlan] {
-    override def apply(plan: LogicalPlan): LogicalPlan = plan.resolveOperatorsUp {
-      case p if !p.resolved => p // Skip unresolved nodes.
+    override def apply(plan: LogicalPlan): LogicalPlan =
+      CustomLogger.logTransformTime("DARSHANA TRANSFORM ResolveEncodersInUDF") {
+      plan.resolveOperatorsUp {
+      case p if !p.resolved =>
+        CustomLogger.logMatchTime("DARSHANA Match ResolveEncodersInUDF", true) {
+          p} // Skip unresolved nodes.
 
-      case p => p transformExpressionsUp {
+      case p =>
+        CustomLogger.logMatchTime("DARSHANA Match ResolveEncodersInUDF", true) {
+        p transformExpressionsUp {
 
         case udf: ScalaUDF if udf.inputEncoders.nonEmpty =>
           val boundEncoders = udf.inputEncoders.zipWithIndex.map { case (encOpt, i) =>
@@ -3134,46 +3390,56 @@ class Analyzer(override val catalogManager: CatalogManager)
             }
           }
           udf.copy(inputEncoders = boundEncoders)
-      }
-    }
+      }}
+    }}
   }
 
   /**
    * Check and add proper window frames for all window functions.
    */
   object ResolveWindowFrame extends Rule[LogicalPlan] {
-    def apply(plan: LogicalPlan): LogicalPlan = plan resolveExpressions {
+    def apply(plan: LogicalPlan): LogicalPlan =
+      CustomLogger.logTransformTime("DARSHANA TRANSFORM ResolveWindowFrame") {
+      plan resolveExpressions {
       case WindowExpression(wf: FrameLessOffsetWindowFunction,
         WindowSpecDefinition(_, _, f: SpecifiedWindowFrame)) if wf.frame != f =>
-        throw QueryCompilationErrors.cannotSpecifyWindowFrameError(wf.prettyName)
+        CustomLogger.logMatchTime("DARSHANA Match ResolveWindowFrame", true) {
+        throw QueryCompilationErrors.cannotSpecifyWindowFrameError(wf.prettyName)}
       case WindowExpression(wf: WindowFunction, WindowSpecDefinition(_, _, f: SpecifiedWindowFrame))
           if wf.frame != UnspecifiedFrame && wf.frame != f =>
-        throw QueryCompilationErrors.windowFrameNotMatchRequiredFrameError(f, wf.frame)
+        CustomLogger.logMatchTime("DARSHANA Match ResolveWindowFrame", true) {
+        throw QueryCompilationErrors.windowFrameNotMatchRequiredFrameError(f, wf.frame)}
       case WindowExpression(wf: WindowFunction, s @ WindowSpecDefinition(_, _, UnspecifiedFrame))
           if wf.frame != UnspecifiedFrame =>
-        WindowExpression(wf, s.copy(frameSpecification = wf.frame))
+        CustomLogger.logMatchTime("DARSHANA Match ResolveWindowFrame", true) {
+        WindowExpression(wf, s.copy(frameSpecification = wf.frame))}
       case we @ WindowExpression(e, s @ WindowSpecDefinition(_, o, UnspecifiedFrame))
           if e.resolved =>
+        CustomLogger.logMatchTime("DARSHANA Match ResolveWindowFrame", true) {
         val frame = if (o.nonEmpty) {
           SpecifiedWindowFrame(RangeFrame, UnboundedPreceding, CurrentRow)
         } else {
           SpecifiedWindowFrame(RowFrame, UnboundedPreceding, UnboundedFollowing)
         }
-        we.copy(windowSpec = s.copy(frameSpecification = frame))
-    }
+        we.copy(windowSpec = s.copy(frameSpecification = frame))}
+    }}
   }
 
   /**
    * Check and add order to [[AggregateWindowFunction]]s.
    */
   object ResolveWindowOrder extends Rule[LogicalPlan] {
-    def apply(plan: LogicalPlan): LogicalPlan = plan resolveExpressions {
+    def apply(plan: LogicalPlan): LogicalPlan =
+      CustomLogger.logTransformTime("DARSHANA TRANSFORM ResolveWindowOrder") {
+      plan resolveExpressions {
       case WindowExpression(wf: WindowFunction, spec) if spec.orderSpec.isEmpty =>
-        throw QueryCompilationErrors.windowFunctionWithWindowFrameNotOrderedError(wf)
+        CustomLogger.logMatchTime("DARSHANA Match ResolveWindowOrder", true) {
+        throw QueryCompilationErrors.windowFunctionWithWindowFrameNotOrderedError(wf)}
       case WindowExpression(rank: RankLike, spec) if spec.resolved =>
+        CustomLogger.logMatchTime("DARSHANA Match ResolveWindowOrder", true) {
         val order = spec.orderSpec.map(_.child)
-        WindowExpression(rank.withOrder(order), spec)
-    }
+        WindowExpression(rank.withOrder(order), spec)}
+    }}
   }
 
   /**
@@ -3181,16 +3447,20 @@ class Analyzer(override val catalogManager: CatalogManager)
    * Then apply a Project on a normal Join to eliminate natural or using join.
    */
   object ResolveNaturalAndUsingJoin extends Rule[LogicalPlan] {
-    override def apply(plan: LogicalPlan): LogicalPlan = plan.resolveOperatorsUp {
+    override def apply(plan: LogicalPlan): LogicalPlan =
+      CustomLogger.logTransformTime("DARSHANA TRANSFORM ResolveNaturalAndUsingJoin") {
+      plan.resolveOperatorsUp {
       case j @ Join(left, right, UsingJoin(joinType, usingCols), _, hint)
           if left.resolved && right.resolved && j.duplicateResolved =>
-        commonNaturalJoinProcessing(left, right, joinType, usingCols, None, hint)
+        CustomLogger.logMatchTime("DARSHANA Match ResolveNaturalAndUsingJoin", true) {
+        commonNaturalJoinProcessing(left, right, joinType, usingCols, None, hint)}
       case j @ Join(left, right, NaturalJoin(joinType), condition, hint)
           if j.resolvedExceptNatural =>
         // find common column names from both sides
+        CustomLogger.logMatchTime("DARSHANA Match ResolveNaturalAndUsingJoin", true) {
         val joinNames = left.output.map(_.name).intersect(right.output.map(_.name))
-        commonNaturalJoinProcessing(left, right, joinType, joinNames, condition, hint)
-    }
+        commonNaturalJoinProcessing(left, right, joinType, joinNames, condition, hint)}
+    }}
   }
 
   /**
@@ -3202,9 +3472,12 @@ class Analyzer(override val catalogManager: CatalogManager)
    * - Detect plans that are not compatible with the output table and throw AnalysisException
    */
   object ResolveOutputRelation extends Rule[LogicalPlan] {
-    override def apply(plan: LogicalPlan): LogicalPlan = plan.resolveOperators {
+    override def apply(plan: LogicalPlan): LogicalPlan =
+      CustomLogger.logTransformTime("DARSHANA TRANSFORM ResolveOutputRelation") {
+      plan.resolveOperators {
       case v2Write: V2WriteCommand
           if v2Write.table.resolved && v2Write.query.resolved && !v2Write.outputResolved =>
+        CustomLogger.logMatchTime("DARSHANA Match ResolveOutputRelation", true) {
         validateStoreAssignmentPolicy()
         val projection = TableOutputResolver.resolveOutputColumns(
           v2Write.table.name, v2Write.table.output, v2Write.query, v2Write.isByName, conf)
@@ -3217,18 +3490,21 @@ class Analyzer(override val catalogManager: CatalogManager)
           v2Write.withNewQuery(projection).withNewTable(cleanedTable)
         } else {
           v2Write
-        }
-    }
+        }}
+    }}
   }
 
   object ResolveUserSpecifiedColumns extends Rule[LogicalPlan] {
-    override def apply(plan: LogicalPlan): LogicalPlan = plan.resolveOperators {
+    override def apply(plan: LogicalPlan): LogicalPlan =
+      CustomLogger.logTransformTime("DARSHANA TRANSFORM ResolveUserSpecifiedColumns") {
+      plan.resolveOperators {
       case i: InsertIntoStatement if i.table.resolved && i.query.resolved &&
           i.userSpecifiedCols.nonEmpty =>
+        CustomLogger.logMatchTime("DARSHANA Match ResolveUserSpecifiedColumns", true) {
         val resolved = resolveUserSpecifiedColumns(i)
         val projection = addColumnListOnQuery(i.table.output, resolved, i.query)
-        i.copy(userSpecifiedCols = Nil, query = projection)
-    }
+        i.copy(userSpecifiedCols = Nil, query = projection)}
+    }}
 
     private def resolveUserSpecifiedColumns(i: InsertIntoStatement): Seq[NamedExpression] = {
       SchemaUtils.checkColumnNameDuplication(
@@ -3321,11 +3597,19 @@ class Analyzer(override val catalogManager: CatalogManager)
    * to the given input attributes.
    */
   object ResolveDeserializer extends Rule[LogicalPlan] {
-    def apply(plan: LogicalPlan): LogicalPlan = plan.resolveOperatorsUp {
-      case p if !p.childrenResolved => p
-      case p if p.resolved => p
+    def apply(plan: LogicalPlan): LogicalPlan =
+      CustomLogger.logTransformTime("DARSHANA: TRANSFORM ResolveDeserializer") {
+      plan.resolveOperatorsUp {
+      case p if !p.childrenResolved =>
+        CustomLogger.logMatchTime("DARSHANA: Match 1 ResolveDeserializer", false) {
+        p}
+      case p if p.resolved =>
+        CustomLogger.logMatchTime("DARSHANA: Match 2 ResolveDeserializer", false) {
+          p}
 
-      case p => p transformExpressions {
+      case p =>
+        CustomLogger.logMatchTime("DARSHANA: Match 3 ResolveDeserializer", false) {
+          p transformExpressions {
         case UnresolvedDeserializer(deserializer, inputAttributes) =>
           val inputs = if (inputAttributes.isEmpty) {
             p.children.flatMap(_.output)
@@ -3361,8 +3645,8 @@ class Analyzer(override val catalogManager: CatalogManager)
           }
           validateNestedTupleFields(result)
           result
-      }
-    }
+      }}
+    }}
 
     private def fail(schema: StructType, maxOrdinal: Int): Unit = {
       throw QueryCompilationErrors.fieldNumberMismatchForDeserializerError(schema, maxOrdinal)
@@ -3416,19 +3700,27 @@ class Analyzer(override val catalogManager: CatalogManager)
    * constructed is an inner class.
    */
   object ResolveNewInstance extends Rule[LogicalPlan] {
-    def apply(plan: LogicalPlan): LogicalPlan = plan.resolveOperatorsUp {
-      case p if !p.childrenResolved => p
-      case p if p.resolved => p
+    def apply(plan: LogicalPlan): LogicalPlan =
+      CustomLogger.logTransformTime("DARSHANA TRANSFORM ResolveNewInstance") {
+      plan.resolveOperatorsUp {
+      case p if !p.childrenResolved =>
+        CustomLogger.logMatchTime("DARSHANA Match ResolveNewInstance", true) {
+        p}
+      case p if p.resolved =>
+        CustomLogger.logMatchTime("DARSHANA Match ResolveNewInstance", true) {
+        p}
 
-      case p => p transformExpressions {
+      case p =>
+        CustomLogger.logMatchTime("DARSHANA Match ResolveNewInstance", true) {
+        p transformExpressions {
         case n: NewInstance if n.childrenResolved && !n.resolved =>
           val outer = OuterScopes.getOuterScope(n.cls)
           if (outer == null) {
             throw QueryCompilationErrors.outerScopeFailureForNewInstanceError(n.cls.getName)
           }
           n.copy(outerPointer = Some(outer))
-      }
-    }
+      }}
+    }}
   }
 
   /**
@@ -3443,15 +3735,23 @@ class Analyzer(override val catalogManager: CatalogManager)
       throw QueryCompilationErrors.upCastFailureError(fromStr, from, to, walkedTypePath)
     }
 
-    def apply(plan: LogicalPlan): LogicalPlan = plan.resolveOperatorsUp {
-      case p if !p.childrenResolved => p
-      case p if p.resolved => p
+    def apply(plan: LogicalPlan): LogicalPlan =
+      CustomLogger.logTransformTime("DARSHANA TRANSFORM ResolveUpCast") {
+        plan.resolveOperatorsUp {
+      case p if !p.childrenResolved =>
+        CustomLogger.logMatchTime("DARSHANA Match ResolveUpCast", false) {
+        p}
+      case p if p.resolved =>
+        CustomLogger.logMatchTime("DARSHANA Match ResolveUpCast", false) {
+          p}
 
-      case p => p transformExpressions {
+      case p =>
+        CustomLogger.logMatchTime("DARSHANA Match ResolveUpCast", false) {
+          p transformExpressions {
         case u @ UpCast(child, _, _) if !child.resolved => u
 
         case UpCast(_, target, _) if target != DecimalType && !target.isInstanceOf[DataType] =>
-          throw QueryCompilationErrors.unsupportedAbstractDataTypeForUpCastError(target)
+            throw QueryCompilationErrors.unsupportedAbstractDataTypeForUpCastError(target)
 
         case UpCast(child, target, walkedTypePath) if target == DecimalType
           && child.dataType.isInstanceOf[DecimalType] =>
@@ -3466,24 +3766,28 @@ class Analyzer(override val catalogManager: CatalogManager)
         case UpCast(child, target: AtomicType, _)
             if conf.getConf(SQLConf.LEGACY_LOOSE_UPCAST) &&
               child.dataType == StringType =>
-          Cast(child, target.asNullable)
+            Cast(child, target.asNullable)
 
         case u @ UpCast(child, _, walkedTypePath) if !Cast.canUpCast(child.dataType, u.dataType) =>
-          fail(child, u.dataType, walkedTypePath)
+            fail(child, u.dataType, walkedTypePath)
 
-        case u @ UpCast(child, _, _) => Cast(child, u.dataType.asNullable)
-      }
-    }
+        case u @ UpCast(child, _, _) =>
+            Cast(child, u.dataType.asNullable)
+      }}
+    }}
   }
 
   /** Rule to mostly resolve, normalize and rewrite column names based on case sensitivity. */
   object ResolveAlterTableChanges extends Rule[LogicalPlan] {
-    def apply(plan: LogicalPlan): LogicalPlan = plan.resolveOperatorsUp {
+    def apply(plan: LogicalPlan): LogicalPlan =
+      CustomLogger.logTransformTime("DARSHANA TRANSFORM ResolveAlterTableChanges") {
+      plan.resolveOperatorsUp {
       case a @ AlterTable(_, _, t: NamedRelation, changes) if t.resolved =>
         // 'colsToAdd' keeps track of new columns being added. It stores a mapping from a
         // normalized parent name of fields to field names that belong to the parent.
         // For example, if we add columns "a.b.c", "a.b.d", and "a.c", 'colsToAdd' will become
         // Map(Seq("a", "b") -> Seq("c", "d"), Seq("a") -> Seq("c")).
+        CustomLogger.logMatchTime("DARSHANA Match ResolveAlterTableChanges", true) {
         val colsToAdd = mutable.Map.empty[Seq[String], Seq[String]]
         val schema = t.schema
         val normalizedChanges = changes.flatMap {
@@ -3602,8 +3906,8 @@ class Analyzer(override val catalogManager: CatalogManager)
           case other => Some(other)
         }
 
-        a.copy(changes = normalizedChanges)
-    }
+        a.copy(changes = normalizedChanges)}
+    }}
 
     /**
      * Returns the table change if the field can be resolved, returns None if the column is not
@@ -3647,9 +3951,12 @@ object EliminateSubqueryAliases extends Rule[LogicalPlan] {
   // This is also called in the beginning of the optimization phase, and as a result
   // is using transformUp rather than resolveOperators.
   def apply(plan: LogicalPlan): LogicalPlan = AnalysisHelper.allowInvokingTransformsInAnalyzer {
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM EliminateSubqueryAliases") {
     plan transformUp {
-      case SubqueryAlias(_, child) => child
-    }
+      case SubqueryAlias(_, child) =>
+       CustomLogger.logMatchTime("DARSHANA Match 1 EliminateSubqueryAliases", true) {
+        child}
+    }}
   }
 }
 
@@ -3657,9 +3964,13 @@ object EliminateSubqueryAliases extends Rule[LogicalPlan] {
  * Removes [[Union]] operators from the plan if it just has one child.
  */
 object EliminateUnions extends Rule[LogicalPlan] {
-  def apply(plan: LogicalPlan): LogicalPlan = plan resolveOperators {
-    case u: Union if u.children.size == 1 => u.children.head
-  }
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM EliminateUnions") {
+    plan resolveOperators {
+    case u: Union if u.children.size == 1 =>
+      CustomLogger.logMatchTime("DARSHANA Match EliminateUnions", true) {
+      u.children.head}
+  }}
 }
 
 /**
@@ -3670,35 +3981,45 @@ object EliminateUnions extends Rule[LogicalPlan] {
  * rule can't work for those parameters.
  */
 object CleanupAliases extends Rule[LogicalPlan] with AliasHelper {
-  override def apply(plan: LogicalPlan): LogicalPlan = plan.resolveOperatorsUp {
+  override def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA: TRANSFORM CleanupAliases") {
+    plan.resolveOperatorsUp {
     case Project(projectList, child) =>
+      CustomLogger.logMatchTime("DARSHANA: Match 1 CleanupAliases", true) {
       val cleanedProjectList = projectList.map(trimNonTopLevelAliases)
-      Project(cleanedProjectList, child)
+      Project(cleanedProjectList, child)}
 
     case Aggregate(grouping, aggs, child) =>
+      CustomLogger.logMatchTime("DARSHANA: Match 2 CleanupAliases", true) {
       val cleanedAggs = aggs.map(trimNonTopLevelAliases)
-      Aggregate(grouping.map(trimAliases), cleanedAggs, child)
+      Aggregate(grouping.map(trimAliases), cleanedAggs, child)}
 
     case Window(windowExprs, partitionSpec, orderSpec, child) =>
+      CustomLogger.logMatchTime("DARSHANA: Match 1 CleanupAliases", true) {
       val cleanedWindowExprs = windowExprs.map(trimNonTopLevelAliases)
       Window(cleanedWindowExprs, partitionSpec.map(trimAliases),
-        orderSpec.map(trimAliases(_).asInstanceOf[SortOrder]), child)
+        orderSpec.map(trimAliases(_).asInstanceOf[SortOrder]), child)}
 
     case CollectMetrics(name, metrics, child) =>
+      CustomLogger.logMatchTime("DARSHANA: Match 3 CleanupAliases", true) {
       val cleanedMetrics = metrics.map(trimNonTopLevelAliases)
-      CollectMetrics(name, cleanedMetrics, child)
+      CollectMetrics(name, cleanedMetrics, child)}
 
     // Operators that operate on objects should only have expressions from encoders, which should
     // never have extra aliases.
-    case o: ObjectConsumer => o
-    case o: ObjectProducer => o
-    case a: AppendColumns => a
+    case o: ObjectConsumer =>
+      CustomLogger.logMatchTime("DARSHANA: Match 4 CleanupAliases", true) {o}
+    case o: ObjectProducer =>
+      CustomLogger.logMatchTime("DARSHANA: Match 5 CleanupAliases", true) {o}
+    case a: AppendColumns =>
+      CustomLogger.logMatchTime("DARSHANA: Match 6 CleanupAliases", true) {a}
 
     case other =>
+      CustomLogger.logMatchTime("DARSHANA Match 7 CleanupAliases", true) {
       other transformExpressionsDown {
         case Alias(child, _) => child
-      }
-  }
+      }}
+  }}
 }
 
 /**
@@ -3751,8 +4072,11 @@ object TimeWindowing extends Rule[LogicalPlan] {
    * @return the logical plan that will generate the time windows using the Expand operator, with
    *         the Filter operator for correctness and Project for usability.
    */
-  def apply(plan: LogicalPlan): LogicalPlan = plan.resolveOperatorsUp {
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM TimeWindowing") {
+      plan.resolveOperatorsUp {
     case p: LogicalPlan if p.children.size == 1 =>
+      CustomLogger.logMatchTime("DARSHANA Match TimeWindowing", true) {
       val child = p.children.head
       val windowExpressions =
         p.expressions.flatMap(_.collect { case t: TimeWindow => t }).toSet
@@ -3830,24 +4154,27 @@ object TimeWindowing extends Rule[LogicalPlan] {
         throw QueryCompilationErrors.multiTimeWindowExpressionsNotSupportedError(p)
       } else {
         p // Return unchanged. Analyzer will throw exception later
-      }
-  }
+      }}
+  }}
 }
 
 /**
  * Resolve a [[CreateNamedStruct]] if it contains [[NamePlaceholder]]s.
  */
 object ResolveCreateNamedStruct extends Rule[LogicalPlan] {
-  override def apply(plan: LogicalPlan): LogicalPlan = plan.resolveExpressions {
+  override def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM ResolveCreateNamedStruct") {
+    plan.resolveExpressions {
     case e: CreateNamedStruct if !e.resolved =>
+      CustomLogger.logMatchTime("DARSHANA Match ResolveCreateNamedStruct", true) {
       val children = e.children.grouped(2).flatMap {
         case Seq(NamePlaceholder, e: NamedExpression) if e.resolved =>
           Seq(Literal(e.name), e)
         case kv =>
           kv
       }
-      CreateNamedStruct(children.toList)
-  }
+      CreateNamedStruct(children.toList)}
+  }}
 }
 
 /**
@@ -3901,16 +4228,18 @@ object UpdateOuterReferences extends Rule[LogicalPlan] {
   }
 
   def apply(plan: LogicalPlan): LogicalPlan = {
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM UpdateOuterReferences") {
     plan resolveOperators {
       case f @ Filter(_, a: Aggregate) if f.resolved =>
+        CustomLogger.logMatchTime("DARSHANA Match UpdateOuterReferences", true) {
         f transformExpressions {
           case s: SubqueryExpression if s.children.nonEmpty =>
             // Collect the aliases from output of aggregate.
             val outerAliases = a.aggregateExpressions collect { case a: Alias => a }
             // Update the subquery plan to record the OuterReference to point to outer query plan.
             s.withNewPlan(updateOuterReferenceInSubquery(s.plan, outerAliases))
-      }
-    }
+      }}
+    }}
   }
 }
 
@@ -3922,32 +4251,25 @@ object UpdateOuterReferences extends Rule[LogicalPlan] {
  */
 object ApplyCharTypePadding extends Rule[LogicalPlan] {
 
-  object AttrOrOuterRef {
-    def unapply(e: Expression): Option[Attribute] = e match {
-      case a: Attribute => Some(a)
-      case OuterReference(a: Attribute) => Some(a)
-      case _ => None
-    }
-  }
-
   override def apply(plan: LogicalPlan): LogicalPlan = {
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM ApplyCharTypePadding") {
     plan.resolveOperatorsUp {
-      case operator => operator.transformExpressionsUp {
-        case e if !e.childrenResolved => e
-
+      case operator if operator.resolved =>
+        CustomLogger.logMatchTime("DARSHANA Match ApplyCharTypePadding", true) {
+        operator.transformExpressionsUp {
         // String literal is treated as char type when it's compared to a char type column.
         // We should pad the shorter one to the longer length.
-        case b @ BinaryComparison(e @ AttrOrOuterRef(attr), lit) if lit.foldable =>
-          padAttrLitCmp(e, attr.metadata, lit).map { newChildren =>
+        case b @ BinaryComparison(attr: Attribute, lit) if lit.foldable =>
+          padAttrLitCmp(attr, lit).map { newChildren =>
             b.withNewChildren(newChildren)
           }.getOrElse(b)
 
-        case b @ BinaryComparison(lit, e @ AttrOrOuterRef(attr)) if lit.foldable =>
-          padAttrLitCmp(e, attr.metadata, lit).map { newChildren =>
+        case b @ BinaryComparison(lit, attr: Attribute) if lit.foldable =>
+          padAttrLitCmp(attr, lit).map { newChildren =>
             b.withNewChildren(newChildren.reverse)
           }.getOrElse(b)
 
-        case i @ In(e @ AttrOrOuterRef(attr), list)
+        case i @ In(attr: Attribute, list)
           if attr.dataType == StringType && list.forall(_.foldable) =>
           CharVarcharUtils.getRawType(attr.metadata).flatMap {
             case CharType(length) =>
@@ -3956,7 +4278,7 @@ object ApplyCharTypePadding extends Rule[LogicalPlan] {
               val literalCharLengths = literalChars.map(_.numChars())
               val targetLen = (length +: literalCharLengths).max
               Some(i.copy(
-                value = addPadding(e, length, targetLen),
+                value = addPadding(attr, length, targetLen),
                 list = list.zip(literalCharLengths).map {
                   case (lit, charLength) => addPadding(lit, charLength, targetLen)
                 } ++ nulls.map(Literal.create(_, StringType))))
@@ -3964,46 +4286,20 @@ object ApplyCharTypePadding extends Rule[LogicalPlan] {
           }.getOrElse(i)
 
         // For char type column or inner field comparison, pad the shorter one to the longer length.
-        case b @ BinaryComparison(e1 @ AttrOrOuterRef(left), e2 @ AttrOrOuterRef(right))
-            // For the same attribute, they must be the same length and no padding is needed.
-            if !left.semanticEquals(right) =>
-          val outerRefs = (e1, e2) match {
-            case (_: OuterReference, _: OuterReference) => Seq(left, right)
-            case (_: OuterReference, _) => Seq(left)
-            case (_, _: OuterReference) => Seq(right)
-            case _ => Nil
-          }
-          val newChildren = CharVarcharUtils.addPaddingInStringComparison(Seq(left, right))
-          if (outerRefs.nonEmpty) {
-            b.withNewChildren(newChildren.map(_.transform {
-              case a: Attribute if outerRefs.exists(_.semanticEquals(a)) => OuterReference(a)
-            }))
-          } else {
-            b.withNewChildren(newChildren)
-          }
+        case b @ BinaryComparison(left: Attribute, right: Attribute) =>
+          b.withNewChildren(CharVarcharUtils.addPaddingInStringComparison(Seq(left, right)))
 
-        case i @ In(e @ AttrOrOuterRef(attr), list) if list.forall(_.isInstanceOf[Attribute]) =>
+        case i @ In(attr: Attribute, list) if list.forall(_.isInstanceOf[Attribute]) =>
           val newChildren = CharVarcharUtils.addPaddingInStringComparison(
             attr +: list.map(_.asInstanceOf[Attribute]))
-          if (e.isInstanceOf[OuterReference]) {
-            i.copy(
-              value = newChildren.head.transform {
-                case a: Attribute if a.semanticEquals(attr) => OuterReference(a)
-              },
-              list = newChildren.tail)
-          } else {
-            i.copy(value = newChildren.head, list = newChildren.tail)
-          }
-      }
-    }
+          i.copy(value = newChildren.head, list = newChildren.tail)
+      }}
+    }}
   }
 
-  private def padAttrLitCmp(
-      expr: Expression,
-      metadata: Metadata,
-      lit: Expression): Option[Seq[Expression]] = {
-    if (expr.dataType == StringType) {
-      CharVarcharUtils.getRawType(metadata).flatMap {
+  private def padAttrLitCmp(attr: Attribute, lit: Expression): Option[Seq[Expression]] = {
+    if (attr.dataType == StringType) {
+      CharVarcharUtils.getRawType(attr.metadata).flatMap {
         case CharType(length) =>
           val str = lit.eval().asInstanceOf[UTF8String]
           if (str == null) {
@@ -4011,9 +4307,9 @@ object ApplyCharTypePadding extends Rule[LogicalPlan] {
           } else {
             val stringLitLen = str.numChars()
             if (length < stringLitLen) {
-              Some(Seq(StringRPad(expr, Literal(stringLitLen)), lit))
+              Some(Seq(StringRPad(attr, Literal(stringLitLen)), lit))
             } else if (length > stringLitLen) {
-              Some(Seq(expr, StringRPad(lit, Literal(length))))
+              Some(Seq(attr, StringRPad(lit, Literal(length))))
             } else {
               None
             }
@@ -4023,14 +4319,6 @@ object ApplyCharTypePadding extends Rule[LogicalPlan] {
     } else {
       None
     }
-  }
-
-  private def padOuterRefAttrCmp(outerAttr: Attribute, attr: Attribute): Seq[Expression] = {
-    val Seq(r, newAttr) = CharVarcharUtils.addPaddingInStringComparison(Seq(outerAttr, attr))
-    val newOuterRef = r.transform {
-      case ar: Attribute if ar.semanticEquals(outerAttr) => OuterReference(ar)
-    }
-    Seq(newOuterRef, newAttr)
   }
 
   private def addPadding(expr: Expression, charLength: Int, targetLength: Int): Expression = {

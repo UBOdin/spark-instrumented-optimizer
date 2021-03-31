@@ -25,7 +25,6 @@ import org.apache.spark.sql.catalyst.analysis.FunctionRegistry.{FUNC_ALIAS, Func
 import org.apache.spark.sql.catalyst.expressions.codegen._
 import org.apache.spark.sql.catalyst.expressions.codegen.Block._
 import org.apache.spark.sql.catalyst.parser.CatalystSqlParser
-import org.apache.spark.sql.catalyst.trees.UnaryLike
 import org.apache.spark.sql.catalyst.util._
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.types._
@@ -522,9 +521,7 @@ case class StringToMap(text: Expression, pairDelim: Expression, keyValueDelim: E
     this(child, Literal(","), Literal(":"))
   }
 
-  override def first: Expression = text
-  override def second: Expression = pairDelim
-  override def third: Expression = keyValueDelim
+  override def children: Seq[Expression] = Seq(text, pairDelim, keyValueDelim)
 
   override def inputTypes: Seq[AbstractDataType] = Seq(StringType, StringType, StringType)
 
@@ -600,7 +597,7 @@ trait StructFieldsOperation {
  * children, and thereby enable the analyzer to resolve and transform valExpr as necessary.
  */
 case class WithField(name: String, valExpr: Expression)
-  extends Unevaluable with StructFieldsOperation with UnaryLike[Expression] {
+  extends Unevaluable with StructFieldsOperation {
 
   override def apply(values: Seq[(StructField, Expression)]): Seq[(StructField, Expression)] = {
     val newFieldExpr = (StructField(name, valExpr.dataType, valExpr.nullable), valExpr)
@@ -618,7 +615,7 @@ case class WithField(name: String, valExpr: Expression)
     result.toSeq
   }
 
-  override def child: Expression = valExpr
+  override def children: Seq[Expression] = valExpr :: Nil
 
   override def dataType: DataType = throw new IllegalStateException(
     "WithField.dataType should not be called.")

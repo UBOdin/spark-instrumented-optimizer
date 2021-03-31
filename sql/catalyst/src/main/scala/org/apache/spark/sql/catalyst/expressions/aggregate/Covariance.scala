@@ -19,7 +19,6 @@ package org.apache.spark.sql.catalyst.expressions.aggregate
 
 import org.apache.spark.sql.catalyst.dsl.expressions._
 import org.apache.spark.sql.catalyst.expressions._
-import org.apache.spark.sql.catalyst.trees.BinaryLike
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.types._
 
@@ -28,10 +27,9 @@ import org.apache.spark.sql.types._
  * When applied on empty data (i.e., count is zero), it returns NULL.
  */
 abstract class Covariance(x: Expression, y: Expression, nullOnDivideByZero: Boolean)
-  extends DeclarativeAggregate with ImplicitCastInputTypes with BinaryLike[Expression] {
+  extends DeclarativeAggregate with ImplicitCastInputTypes {
 
-  override def left: Expression = x
-  override def right: Expression = y
+  override def children: Seq[Expression] = Seq(x, y)
   override def nullable: Boolean = true
   override def dataType: DataType = DoubleType
   override def inputTypes: Seq[AbstractDataType] = Seq(DoubleType, DoubleType)
@@ -99,8 +97,8 @@ abstract class Covariance(x: Expression, y: Expression, nullOnDivideByZero: Bool
   group = "agg_funcs",
   since = "2.0.0")
 case class CovPopulation(
-    override val left: Expression,
-    override val right: Expression,
+    left: Expression,
+    right: Expression,
     nullOnDivideByZero: Boolean = !SQLConf.get.legacyStatisticalAggregate)
   extends Covariance(left, right, nullOnDivideByZero) {
 
@@ -124,8 +122,8 @@ case class CovPopulation(
   group = "agg_funcs",
   since = "2.0.0")
 case class CovSample(
-    override val left: Expression,
-    override val right: Expression,
+    left: Expression,
+    right: Expression,
     nullOnDivideByZero: Boolean = !SQLConf.get.legacyStatisticalAggregate)
   extends Covariance(left, right, nullOnDivideByZero) {
 

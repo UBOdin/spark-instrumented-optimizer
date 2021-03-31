@@ -17,6 +17,7 @@
 
 package org.apache.spark.sql.catalyst.analysis
 
+import org.apache.spark.sql.catalyst.CustomLogger
 import org.apache.spark.sql.catalyst.plans.logical._
 import org.apache.spark.sql.catalyst.rules.Rule
 import org.apache.spark.sql.connector.catalog.{CatalogManager, CatalogPlugin, LookupCatalog, TableChange}
@@ -30,9 +31,12 @@ class ResolveCatalogs(val catalogManager: CatalogManager)
   import org.apache.spark.sql.connector.catalog.CatalogV2Implicits._
   import org.apache.spark.sql.connector.catalog.CatalogV2Util._
 
-  override def apply(plan: LogicalPlan): LogicalPlan = plan resolveOperators {
+  override def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM ResolveCatalogs") {
+    plan resolveOperators {
     case AlterTableAddColumnsStatement(
          nameParts @ NonSessionCatalogAndTable(catalog, tbl), cols) =>
+      CustomLogger.logMatchTime("DARSHANA Match ResolveCatalogs", true) {
       cols.foreach(c => failNullType(c.dataType))
       val changes = cols.map { col =>
         TableChange.addColumn(
@@ -42,10 +46,11 @@ class ResolveCatalogs(val catalogManager: CatalogManager)
           col.comment.orNull,
           col.position.orNull)
       }
-      createAlterTable(nameParts, catalog, tbl, changes)
+      createAlterTable(nameParts, catalog, tbl, changes)}
 
     case AlterTableReplaceColumnsStatement(
         nameParts @ NonSessionCatalogAndTable(catalog, tbl), cols) =>
+      CustomLogger.logMatchTime("DARSHANA Match ResolveCatalogs", true) {
       cols.foreach(c => failNullType(c.dataType))
       val changes: Seq[TableChange] = loadTable(catalog, tbl.asIdentifier) match {
         case Some(table) =>
@@ -64,10 +69,11 @@ class ResolveCatalogs(val catalogManager: CatalogManager)
           deleteChanges ++ addChanges
         case None => Seq()
       }
-      createAlterTable(nameParts, catalog, tbl, changes)
+      createAlterTable(nameParts, catalog, tbl, changes)}
 
     case a @ AlterTableAlterColumnStatement(
          nameParts @ NonSessionCatalogAndTable(catalog, tbl), _, _, _, _, _) =>
+      CustomLogger.logMatchTime("DARSHANA Match ResolveCatalogs", true) {
       a.dataType.foreach(failNullType)
       val colName = a.column.toArray
       val typeChange = a.dataType.map { newDataType =>
@@ -86,20 +92,23 @@ class ResolveCatalogs(val catalogManager: CatalogManager)
         nameParts,
         catalog,
         tbl,
-        typeChange.toSeq ++ nullabilityChange ++ commentChange ++ positionChange)
+        typeChange.toSeq ++ nullabilityChange ++ commentChange ++ positionChange)}
 
     case AlterTableRenameColumnStatement(
          nameParts @ NonSessionCatalogAndTable(catalog, tbl), col, newName) =>
+      CustomLogger.logMatchTime("DARSHANA Match ResolveCatalogs", true) {
       val changes = Seq(TableChange.renameColumn(col.toArray, newName))
-      createAlterTable(nameParts, catalog, tbl, changes)
+      createAlterTable(nameParts, catalog, tbl, changes)}
 
     case AlterTableDropColumnsStatement(
          nameParts @ NonSessionCatalogAndTable(catalog, tbl), cols) =>
+      CustomLogger.logMatchTime("DARSHANA Match ResolveCatalogs", true) {
       val changes = cols.map(col => TableChange.deleteColumn(col.toArray))
-      createAlterTable(nameParts, catalog, tbl, changes)
+      createAlterTable(nameParts, catalog, tbl, changes)}
 
     case c @ CreateTableStatement(
          NonSessionCatalogAndTable(catalog, tbl), _, _, _, _, _, _, _, _, _, _, _) =>
+      CustomLogger.logMatchTime("DARSHANA Match ResolveCatalogs", true) {
       assertNoNullTypeInSchema(c.tableSchema)
       CreateV2Table(
         catalog.asTableCatalog,
@@ -108,10 +117,11 @@ class ResolveCatalogs(val catalogManager: CatalogManager)
         // convert the bucket spec and add it as a transform
         c.partitioning ++ c.bucketSpec.map(_.asTransform),
         convertTableProperties(c),
-        ignoreIfExists = c.ifNotExists)
+        ignoreIfExists = c.ifNotExists)}
 
     case c @ CreateTableAsSelectStatement(
          NonSessionCatalogAndTable(catalog, tbl), _, _, _, _, _, _, _, _, _, _, _, _) =>
+      CustomLogger.logMatchTime("DARSHANA Match ResolveCatalogs", true) {
       if (c.asSelect.resolved) {
         assertNoNullTypeInSchema(c.asSelect.schema)
       }
@@ -123,10 +133,11 @@ class ResolveCatalogs(val catalogManager: CatalogManager)
         c.asSelect,
         convertTableProperties(c),
         writeOptions = c.writeOptions,
-        ignoreIfExists = c.ifNotExists)
+        ignoreIfExists = c.ifNotExists)}
 
     case c @ ReplaceTableStatement(
          NonSessionCatalogAndTable(catalog, tbl), _, _, _, _, _, _, _, _, _, _) =>
+      CustomLogger.logMatchTime("DARSHANA Match ResolveCatalogs", true) {
       assertNoNullTypeInSchema(c.tableSchema)
       ReplaceTable(
         catalog.asTableCatalog,
@@ -135,10 +146,11 @@ class ResolveCatalogs(val catalogManager: CatalogManager)
         // convert the bucket spec and add it as a transform
         c.partitioning ++ c.bucketSpec.map(_.asTransform),
         convertTableProperties(c),
-        orCreate = c.orCreate)
+        orCreate = c.orCreate)}
 
     case c @ ReplaceTableAsSelectStatement(
          NonSessionCatalogAndTable(catalog, tbl), _, _, _, _, _, _, _, _, _, _, _) =>
+      CustomLogger.logMatchTime("DARSHANA Match ResolveCatalogs", true) {
       if (c.asSelect.resolved) {
         assertNoNullTypeInSchema(c.asSelect.schema)
       }
@@ -150,24 +162,27 @@ class ResolveCatalogs(val catalogManager: CatalogManager)
         c.asSelect,
         convertTableProperties(c),
         writeOptions = c.writeOptions,
-        orCreate = c.orCreate)
+        orCreate = c.orCreate)}
 
     case c @ CreateNamespaceStatement(CatalogAndNamespace(catalog, ns), _, _)
         if !isSessionCatalog(catalog) =>
-      CreateNamespace(catalog.asNamespaceCatalog, ns, c.ifNotExists, c.properties)
+     CustomLogger.logMatchTime("DARSHANA Match ResolveCatalogs", true) {
+      CreateNamespace(catalog.asNamespaceCatalog, ns, c.ifNotExists, c.properties)}
 
     case UseStatement(isNamespaceSet, nameParts) =>
+      CustomLogger.logMatchTime("DARSHANA Match ResolveCatalogs", true) {
       if (isNamespaceSet) {
         SetCatalogAndNamespace(catalogManager, None, Some(nameParts))
       } else {
         val CatalogAndNamespace(catalog, ns) = nameParts
         val namespace = if (ns.nonEmpty) Some(ns) else None
         SetCatalogAndNamespace(catalogManager, Some(catalog.name()), namespace)
-      }
+      }}
 
     case ShowCurrentNamespaceStatement() =>
-      ShowCurrentNamespace(catalogManager)
-  }
+      CustomLogger.logMatchTime("DARSHANA Match ResolveCatalogs", true) {
+      ShowCurrentNamespace(catalogManager)}
+  }}
 
   object NonSessionCatalogAndTable {
     def unapply(nameParts: Seq[String]): Option[(CatalogPlugin, Seq[String])] = nameParts match {

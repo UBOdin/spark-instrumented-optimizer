@@ -20,7 +20,6 @@ package org.apache.spark.sql.catalyst.expressions.aggregate
 import org.apache.spark.sql.catalyst.analysis.TypeCheckResult
 import org.apache.spark.sql.catalyst.dsl.expressions._
 import org.apache.spark.sql.catalyst.expressions._
-import org.apache.spark.sql.catalyst.trees.UnaryLike
 import org.apache.spark.sql.catalyst.util.TypeUtils
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.types._
@@ -38,8 +37,9 @@ import org.apache.spark.sql.types._
   """,
   group = "agg_funcs",
   since = "1.0.0")
-case class Sum(child: Expression) extends DeclarativeAggregate with ImplicitCastInputTypes
-    with UnaryLike[Expression] {
+case class Sum(child: Expression) extends DeclarativeAggregate with ImplicitCastInputTypes {
+
+  override def children: Seq[Expression] = child :: Nil
 
   override def nullable: Boolean = true
 

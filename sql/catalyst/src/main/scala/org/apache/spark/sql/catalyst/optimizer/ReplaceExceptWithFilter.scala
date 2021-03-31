@@ -19,6 +19,7 @@ package org.apache.spark.sql.catalyst.optimizer
 
 import scala.annotation.tailrec
 
+import org.apache.spark.sql.catalyst.CustomLogger
 import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.catalyst.plans.logical._
 import org.apache.spark.sql.catalyst.rules.Rule
@@ -42,12 +43,14 @@ import org.apache.spark.sql.catalyst.rules.Rule
 object ReplaceExceptWithFilter extends Rule[LogicalPlan] {
 
   def apply(plan: LogicalPlan): LogicalPlan = {
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM ReplaceExceptWithFilter") {
     if (!plan.conf.replaceExceptWithFilter) {
       return plan
     }
 
     plan.transform {
       case e @ Except(left, right, false) if isEligible(left, right) =>
+        CustomLogger.logMatchTime("DARSHANA Match ReplaceExceptWithFilter", true) {
         val filterCondition = combineFilters(skipProject(right)).asInstanceOf[Filter].condition
         if (filterCondition.deterministic) {
           transformCondition(left, filterCondition).map { c =>
@@ -57,8 +60,8 @@ object ReplaceExceptWithFilter extends Rule[LogicalPlan] {
           }
         } else {
           e
-        }
-    }
+        }}
+    }}
   }
 
   private def transformCondition(plan: LogicalPlan, condition: Expression): Option[Expression] = {

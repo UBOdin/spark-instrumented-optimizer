@@ -20,6 +20,7 @@ package org.apache.spark.sql.catalyst.optimizer
 import scala.annotation.tailrec
 
 import org.apache.spark.sql.AnalysisException
+import org.apache.spark.sql.catalyst.CustomLogger
 import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.catalyst.planning.ExtractFiltersAndInnerJoins
 import org.apache.spark.sql.catalyst.plans._
@@ -88,9 +89,12 @@ object ReorderJoin extends Rule[LogicalPlan] with PredicateHelper {
     }
   }
 
-  def apply(plan: LogicalPlan): LogicalPlan = plan transform {
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM ReorderJoin") {
+    plan transform {
     case p @ ExtractFiltersAndInnerJoins(input, conditions)
         if input.size > 2 && conditions.nonEmpty =>
+      CustomLogger.logMatchTime("DARSHANA Match ReorderJoin", true) {
       val reordered = if (conf.starSchemaDetection && !conf.cboEnabled) {
         val starJoinPlan = StarSchemaDetection.reorderStarJoins(input, conditions)
         if (starJoinPlan.nonEmpty) {
@@ -109,8 +113,8 @@ object ReorderJoin extends Rule[LogicalPlan] with PredicateHelper {
         // Reordering the joins have changed the order of the columns.
         // Inject a projection to make sure we restore to the expected ordering.
         Project(p.output, reordered)
-      }
-  }
+      }}
+  }}
 }
 
 /**
@@ -158,11 +162,14 @@ object EliminateOuterJoin extends Rule[LogicalPlan] with PredicateHelper {
     }
   }
 
-  def apply(plan: LogicalPlan): LogicalPlan = plan transform {
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM EliminateOuterJoin") {
+    plan transform {
     case f @ Filter(condition, j @ Join(_, _, RightOuter | LeftOuter | FullOuter, _, _)) =>
+      CustomLogger.logMatchTime("DARSHANA Match EliminateOuterJoin", true) {
       val newJoinType = buildNewJoinType(f, j)
-      if (j.joinType == newJoinType) f else Filter(condition, j.copy(joinType = newJoinType))
-  }
+      if (j.joinType == newJoinType) f else Filter(condition, j.copy(joinType = newJoinType))}
+  }}
 }
 
 /**
@@ -178,8 +185,11 @@ object ExtractPythonUDFFromJoinCondition extends Rule[LogicalPlan] with Predicat
     }.isDefined
   }
 
-  override def apply(plan: LogicalPlan): LogicalPlan = plan transformUp {
+  override def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM ExtractPythonUDFFromJoinCondition") {
+    plan transformUp {
     case j @ Join(_, _, joinType, Some(cond), _) if hasUnevaluablePythonUDF(cond, j) =>
+      CustomLogger.logMatchTime("DARSHANA Match ExtractPythonUDFFromJoinCondition", true) {
       if (!joinType.isInstanceOf[InnerLike]) {
         // The current strategy supports only InnerLike join because for other types,
         // it breaks SQL semantic if we run the join condition as a filter after join. If we pass
@@ -205,8 +215,8 @@ object ExtractPythonUDFFromJoinCondition extends Rule[LogicalPlan] with Predicat
         case _ =>
           throw new AnalysisException("Using PythonUDF in join condition of join type" +
             s" $joinType is not supported.")
-      }
-  }
+      }}
+  }}
 }
 
 sealed abstract class BuildSide

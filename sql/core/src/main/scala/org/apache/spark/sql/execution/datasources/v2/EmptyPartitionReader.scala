@@ -17,8 +17,9 @@
 
 package org.apache.spark.sql.execution.datasources.v2
 
+import java.io.IOException
+
 import org.apache.spark.sql.connector.read.PartitionReader
-import org.apache.spark.sql.errors.QueryExecutionErrors
 
 /**
  * A [[PartitionReader]] with empty output.
@@ -27,7 +28,7 @@ class EmptyPartitionReader[T] extends PartitionReader[T] {
   override def next(): Boolean = false
 
   override def get(): T =
-    throw QueryExecutionErrors.noRecordsFromEmptyDataReaderError()
+    throw new IOException("No records should be returned from EmptyDataReader")
 
   override def close(): Unit = {}
 }

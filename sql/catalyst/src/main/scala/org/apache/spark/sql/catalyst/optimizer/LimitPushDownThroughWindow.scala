@@ -17,6 +17,7 @@
 
 package org.apache.spark.sql.catalyst.optimizer
 
+import org.apache.spark.sql.catalyst.CustomLogger
 import org.apache.spark.sql.catalyst.expressions.{Alias, CurrentRow, IntegerLiteral, NamedExpression, RankLike, RowFrame, RowNumberLike, SpecifiedWindowFrame, UnboundedPreceding, WindowExpression, WindowSpecDefinition}
 import org.apache.spark.sql.catalyst.plans.logical.{Limit, LocalLimit, LogicalPlan, Project, Sort, Window}
 import org.apache.spark.sql.catalyst.rules.Rule
@@ -37,20 +38,24 @@ object LimitPushDownThroughWindow extends Rule[LogicalPlan] {
     case _ => false
   }
 
-  def apply(plan: LogicalPlan): LogicalPlan = plan transform {
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM LimitPushDownThroughWindow") {
+    plan transform {
     // Adding an extra Limit below WINDOW when the partitionSpec of all window functions is empty.
     case LocalLimit(limitExpr @ IntegerLiteral(limit),
         window @ Window(windowExpressions, Nil, orderSpec, child))
       if supportsPushdownThroughWindow(windowExpressions) && child.maxRows.forall(_ > limit) &&
         limit < conf.topKSortFallbackThreshold =>
       // Sort is needed here because we need global sort.
-      window.copy(child = Limit(limitExpr, Sort(orderSpec, true, child)))
+      CustomLogger.logMatchTime("DARSHANA Match LimitPushDownThroughWindow", true) {
+      window.copy(child = Limit(limitExpr, Sort(orderSpec, true, child)))}
     // There is a Project between LocalLimit and Window if they do not have the same output.
     case LocalLimit(limitExpr @ IntegerLiteral(limit), project @ Project(_,
         window @ Window(windowExpressions, Nil, orderSpec, child)))
       if supportsPushdownThroughWindow(windowExpressions) && child.maxRows.forall(_ > limit) &&
         limit < conf.topKSortFallbackThreshold =>
       // Sort is needed here because we need global sort.
-      project.copy(child = window.copy(child = Limit(limitExpr, Sort(orderSpec, true, child))))
-  }
+      CustomLogger.logMatchTime("DARSHANA Match LimitPushDownThroughWindow", true) {
+      project.copy(child = window.copy(child = Limit(limitExpr, Sort(orderSpec, true, child))))}
+  }}
 }

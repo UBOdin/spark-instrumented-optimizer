@@ -22,6 +22,7 @@ import javax.annotation.concurrent.GuardedBy
 import scala.collection.mutable
 
 import org.apache.spark.sql.catalyst.analysis.TempTableAlreadyExistsException
+import org.apache.spark.sql.catalyst.plans.logical.LogicalPlan
 import org.apache.spark.sql.catalyst.util.StringUtils
 import org.apache.spark.sql.errors.QueryCompilationErrors
 
@@ -39,12 +40,12 @@ class GlobalTempViewManager(val database: String) {
 
   /** List of view definitions, mapping from view name to logical plan. */
   @GuardedBy("this")
-  private val viewDefinitions = new mutable.HashMap[String, TemporaryViewRelation]
+  private val viewDefinitions = new mutable.HashMap[String, LogicalPlan]
 
   /**
    * Returns the global view definition which matches the given name, or None if not found.
    */
-  def get(name: String): Option[TemporaryViewRelation] = synchronized {
+  def get(name: String): Option[LogicalPlan] = synchronized {
     viewDefinitions.get(name)
   }
 
@@ -54,7 +55,7 @@ class GlobalTempViewManager(val database: String) {
    */
   def create(
       name: String,
-      viewDefinition: TemporaryViewRelation,
+      viewDefinition: LogicalPlan,
       overrideIfExists: Boolean): Unit = synchronized {
     if (!overrideIfExists && viewDefinitions.contains(name)) {
       throw new TempTableAlreadyExistsException(name)
@@ -67,7 +68,7 @@ class GlobalTempViewManager(val database: String) {
    */
   def update(
       name: String,
-      viewDefinition: TemporaryViewRelation): Boolean = synchronized {
+      viewDefinition: LogicalPlan): Boolean = synchronized {
     if (viewDefinitions.contains(name)) {
       viewDefinitions.put(name, viewDefinition)
       true

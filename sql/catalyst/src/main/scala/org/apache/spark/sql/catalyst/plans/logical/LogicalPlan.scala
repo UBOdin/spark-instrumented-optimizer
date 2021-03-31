@@ -23,7 +23,6 @@ import org.apache.spark.sql.catalyst.analysis._
 import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.catalyst.plans.QueryPlan
 import org.apache.spark.sql.catalyst.plans.logical.statsEstimation.LogicalPlanStats
-import org.apache.spark.sql.catalyst.trees.{BinaryLike, LeafLike, UnaryLike}
 import org.apache.spark.sql.types.StructType
 
 
@@ -159,7 +158,8 @@ abstract class LogicalPlan
 /**
  * A logical plan node with no children.
  */
-trait LeafNode extends LogicalPlan with LeafLike[LogicalPlan] {
+abstract class LeafNode extends LogicalPlan {
+  override final def children: Seq[LogicalPlan] = Nil
   override def producedAttributes: AttributeSet = outputSet
 
   /** Leaf nodes that can survive analysis must define their own statistics. */
@@ -169,7 +169,11 @@ trait LeafNode extends LogicalPlan with LeafLike[LogicalPlan] {
 /**
  * A logical plan node with single child.
  */
-trait UnaryNode extends LogicalPlan with UnaryLike[LogicalPlan] {
+abstract class UnaryNode extends LogicalPlan {
+  def child: LogicalPlan
+
+  override final def children: Seq[LogicalPlan] = child :: Nil
+
   /**
    * Generates all valid constraints including an set of aliased constraints by replacing the
    * original constraint expressions with the corresponding alias
@@ -198,7 +202,12 @@ trait UnaryNode extends LogicalPlan with UnaryLike[LogicalPlan] {
 /**
  * A logical plan node with a left and right child.
  */
-trait BinaryNode extends LogicalPlan with BinaryLike[LogicalPlan]
+abstract class BinaryNode extends LogicalPlan {
+  def left: LogicalPlan
+  def right: LogicalPlan
+
+  override final def children: Seq[LogicalPlan] = Seq(left, right)
+}
 
 abstract class OrderPreservingUnaryNode extends UnaryNode {
   override final def outputOrdering: Seq[SortOrder] = child.outputOrdering

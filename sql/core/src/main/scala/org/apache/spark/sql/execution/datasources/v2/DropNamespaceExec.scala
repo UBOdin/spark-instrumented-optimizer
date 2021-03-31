@@ -17,10 +17,11 @@
 
 package org.apache.spark.sql.execution.datasources.v2
 
+import org.apache.spark.SparkException
 import org.apache.spark.sql.catalyst.InternalRow
+import org.apache.spark.sql.catalyst.analysis.NoSuchNamespaceException
 import org.apache.spark.sql.catalyst.expressions.Attribute
 import org.apache.spark.sql.connector.catalog.CatalogPlugin
-import org.apache.spark.sql.errors.{QueryCompilationErrors, QueryExecutionErrors}
 
 /**
  * Physical plan node for dropping a namespace.
@@ -42,15 +43,17 @@ case class DropNamespaceExec(
       if (!cascade) {
         if (catalog.asTableCatalog.listTables(ns).nonEmpty
           || nsCatalog.listNamespaces(ns).nonEmpty) {
-          throw QueryExecutionErrors.cannotDropNonemptyNamespaceError(namespace)
+          throw new SparkException(
+            s"Cannot drop a non-empty namespace: ${namespace.quoted}. " +
+              "Use CASCADE option to drop a non-empty namespace.")
         }
       }
 
       if (!nsCatalog.dropNamespace(ns)) {
-        throw QueryExecutionErrors.cannotDropNonemptyNamespaceError(namespace)
+        throw new SparkException(s"Failed to drop a namespace: ${namespace.quoted}.")
       }
     } else if (!ifExists) {
-      throw QueryCompilationErrors.noSuchNamespaceError(ns)
+      throw new NoSuchNamespaceException(ns)
     }
 
     Seq.empty

@@ -17,9 +17,9 @@
 
 package org.apache.spark.sql.catalyst.optimizer
 
+import org.apache.spark.sql.catalyst.CustomLogger
 import org.apache.spark.sql.catalyst.analysis.CastSupport
 import org.apache.spark.sql.catalyst.expressions._
-import org.apache.spark.sql.catalyst.expressions.Literal.FalseLiteral
 import org.apache.spark.sql.catalyst.plans._
 import org.apache.spark.sql.catalyst.plans.logical._
 import org.apache.spark.sql.catalyst.rules._
@@ -31,7 +31,6 @@ import org.apache.spark.sql.catalyst.rules._
  *    - Join with one or two empty children (including Intersect/Except).
  * 2. Unary-node Logical Plans
  *    - Project/Filter/Sample/Join/Limit/Repartition with all empty children.
- *    - Join with false condition.
  *    - Aggregate with all empty children and at least one grouping expression.
  *    - Generate(Explode) with all empty children. Others like Hive UDTF may return results.
  */
@@ -48,8 +47,11 @@ object PropagateEmptyRelation extends Rule[LogicalPlan] with PredicateHelper wit
   private def nullValueProjectList(plan: LogicalPlan): Seq[NamedExpression] =
     plan.output.map{ a => Alias(cast(Literal(null), a.dataType), a.name)(a.exprId) }
 
-  def apply(plan: LogicalPlan): LogicalPlan = plan transformUp {
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM PropagateEmptyRelation") {
+    plan transformUp {
     case p: Union if p.children.exists(isEmptyLocalRelation) =>
+      CustomLogger.logMatchTime("DARSHANA Match PropagateEmptyRelation", true) {
       val newChildren = p.children.filterNot(isEmptyLocalRelation)
       if (newChildren.isEmpty) {
         empty(p)
@@ -68,44 +70,39 @@ object PropagateEmptyRelation extends Rule[LogicalPlan] with PredicateHelper wit
           }
           Project(outputAliases, newPlan)
         }
-      }
+      }}
 
     // Joins on empty LocalRelations generated from streaming sources are not eliminated
     // as stateful streaming joins need to perform other state management operations other than
     // just processing the input data.
-    case p @ Join(_, _, joinType, conditionOpt, _)
+    case p @ Join(_, _, joinType, _, _)
         if !p.children.exists(_.isStreaming) =>
+      CustomLogger.logMatchTime("DARSHANA Match PropagateEmptyRelation", true) {
       val isLeftEmpty = isEmptyLocalRelation(p.left)
       val isRightEmpty = isEmptyLocalRelation(p.right)
-      val isFalseCondition = conditionOpt match {
-        case Some(FalseLiteral) => true
-        case _ => false
-      }
-      if (isLeftEmpty || isRightEmpty || isFalseCondition) {
+      if (isLeftEmpty || isRightEmpty) {
         joinType match {
           case _: InnerLike => empty(p)
           // Intersect is handled as LeftSemi by `ReplaceIntersectWithSemiJoin` rule.
           // Except is handled as LeftAnti by `ReplaceExceptWithAntiJoin` rule.
           case LeftOuter | LeftSemi | LeftAnti if isLeftEmpty => empty(p)
-          case LeftSemi if isRightEmpty | isFalseCondition => empty(p)
-          case LeftAnti if isRightEmpty | isFalseCondition => p.left
+          case LeftSemi if isRightEmpty => empty(p)
+          case LeftAnti if isRightEmpty => p.left
           case FullOuter if isLeftEmpty && isRightEmpty => empty(p)
           case LeftOuter | FullOuter if isRightEmpty =>
             Project(p.left.output ++ nullValueProjectList(p.right), p.left)
           case RightOuter if isRightEmpty => empty(p)
           case RightOuter | FullOuter if isLeftEmpty =>
             Project(nullValueProjectList(p.left) ++ p.right.output, p.right)
-          case LeftOuter if isFalseCondition =>
-            Project(p.left.output ++ nullValueProjectList(p.right), p.left)
-          case RightOuter if isFalseCondition =>
-            Project(nullValueProjectList(p.left) ++ p.right.output, p.right)
           case _ => p
         }
       } else {
         p
-      }
+      }}
 
-    case p: UnaryNode if p.children.nonEmpty && p.children.forall(isEmptyLocalRelation) => p match {
+    case p: UnaryNode if p.children.nonEmpty && p.children.forall(isEmptyLocalRelation) =>
+      CustomLogger.logMatchTime("DARSHANA Match PropagateEmptyRelation", true) {
+      p match {
       case _: Project => empty(p)
       case _: Filter => empty(p)
       case _: Sample => empty(p)
@@ -132,6 +129,6 @@ object PropagateEmptyRelation extends Rule[LogicalPlan] with PredicateHelper wit
       // Generators like Hive-style UDTF may return their records within `close`.
       case Generate(_: Explode, _, _, _, _, _) => empty(p)
       case _ => p
-    }
-  }
+    }}
+  }}
 }

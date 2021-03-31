@@ -16,6 +16,7 @@
  */
 package org.apache.spark.sql.catalyst.analysis
 
+import org.apache.spark.sql.catalyst.CustomLogger
 import org.apache.spark.sql.catalyst.SQLConfHelper
 import org.apache.spark.sql.catalyst.expressions.{Cast, Expression, ListQuery, TimeZoneAwareExpression}
 import org.apache.spark.sql.catalyst.plans.logical.LogicalPlan
@@ -29,16 +30,20 @@ import org.apache.spark.sql.types.DataType
 object ResolveTimeZone extends Rule[LogicalPlan] {
   private val transformTimeZoneExprs: PartialFunction[Expression, Expression] = {
     case e: TimeZoneAwareExpression if e.timeZoneId.isEmpty =>
-      e.withTimeZone(conf.sessionLocalTimeZone)
+      CustomLogger.logMatchTime("DARSHANA: Match 1 ResolveTimeZone", true) {
+      e.withTimeZone(conf.sessionLocalTimeZone)}
     // Casts could be added in the subquery plan through the rule TypeCoercion while coercing
     // the types between the value expression and list query expression of IN expression.
     // We need to subject the subquery plan through ResolveTimeZone again to setup timezone
     // information for time zone aware expressions.
-    case e: ListQuery => e.withNewPlan(apply(e.plan))
+    case e: ListQuery =>
+      CustomLogger.logMatchTime("DARSHANA: Match 2 ResolveTimeZone", true) {
+      e.withNewPlan(apply(e.plan))}
   }
 
   override def apply(plan: LogicalPlan): LogicalPlan =
-    plan.resolveExpressions(transformTimeZoneExprs)
+    CustomLogger.logTransformTime("DARSHANA: TRANSFORM ResolveTimeZone") {
+    plan.resolveExpressions(transformTimeZoneExprs)}
 
   def resolveTimeZones(e: Expression): Expression = e.transform(transformTimeZoneExprs)
 }

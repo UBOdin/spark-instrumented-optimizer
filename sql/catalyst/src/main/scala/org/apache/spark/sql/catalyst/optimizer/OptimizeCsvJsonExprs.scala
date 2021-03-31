@@ -17,6 +17,7 @@
 
 package org.apache.spark.sql.catalyst.optimizer
 
+import org.apache.spark.sql.catalyst.CustomLogger
 import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.catalyst.plans.logical.LogicalPlan
 import org.apache.spark.sql.catalyst.rules.Rule
@@ -37,8 +38,11 @@ import org.apache.spark.sql.types.{ArrayType, StructType}
 object OptimizeCsvJsonExprs extends Rule[LogicalPlan] {
   private def nameOfCorruptRecord = conf.columnNameOfCorruptRecord
 
-  override def apply(plan: LogicalPlan): LogicalPlan = plan transform {
+  override def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM OptimizeCsvJsonExprs") {
+    plan transform {
     case p =>
+      CustomLogger.logMatchTime("DARSHANA Match OptimizeCsvJsonExprs", true) {
       val optimized = if (conf.jsonExpressionOptimization) {
         p.transformExpressions(jsonOptimization)
       } else {
@@ -49,8 +53,8 @@ object OptimizeCsvJsonExprs extends Rule[LogicalPlan] {
         optimized.transformExpressions(csvOptimization)
       } else {
         optimized
-      }
-  }
+      }}
+  }}
 
   private val jsonOptimization: PartialFunction[Expression, Expression] = {
     case c: CreateNamedStruct

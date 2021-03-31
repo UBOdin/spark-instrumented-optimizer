@@ -1428,9 +1428,7 @@ case class Slice(x: Expression, start: Expression, length: Expression)
 
   override def inputTypes: Seq[AbstractDataType] = Seq(ArrayType, IntegerType, IntegerType)
 
-  override def first: Expression = x
-  override def second: Expression = start
-  override def third: Expression = length
+  @transient override lazy val children: Seq[Expression] = Seq(x, start, length) // called from eval
 
   @transient private lazy val elementType: DataType = x.dataType.asInstanceOf[ArrayType].elementType
 

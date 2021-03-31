@@ -20,6 +20,7 @@ package org.apache.spark.sql.catalyst.analysis
 import scala.collection.mutable
 
 import org.apache.spark.sql.AnalysisException
+import org.apache.spark.sql.catalyst.CustomLogger
 import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.catalyst.optimizer.{CombineUnions, OptimizeUpdateFields}
 import org.apache.spark.sql.catalyst.plans.logical.{LogicalPlan, Project, Union}
@@ -249,14 +250,18 @@ object ResolveUnion extends Rule[LogicalPlan] {
       caseSensitiveAnalysis)
   }
 
-  def apply(plan: LogicalPlan): LogicalPlan = plan resolveOperatorsUp {
-    case e if !e.childrenResolved => e
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA: TRANSFORM ResolveUnion") {
+    plan resolveOperatorsUp {
+    case e if !e.childrenResolved =>
+    CustomLogger.logMatchTime("DARSHANA: Match 1 ResolveUnion", false) {e}
 
     case Union(children, byName, allowMissingCol) if byName =>
+      CustomLogger.logMatchTime("DARSHANA: Match 2 ResolveUnion", true) {
       val union = children.reduceLeft { (left, right) =>
         checkColumnNames(left, right)
         unionTwoSides(left, right, allowMissingCol)
       }
-      CombineUnions(union)
-  }
+      CombineUnions(union)}
+  }}
 }

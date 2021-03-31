@@ -20,6 +20,7 @@ package org.apache.spark.sql.catalyst.optimizer
 import scala.collection.mutable.ArrayBuffer
 
 import org.apache.spark.api.java.function.FilterFunction
+import org.apache.spark.sql.catalyst.CustomLogger
 import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.catalyst.expressions.objects._
 import org.apache.spark.sql.catalyst.plans.logical._
@@ -35,17 +36,21 @@ import org.apache.spark.sql.types.{ArrayType, DataType, MapType, StructType, Use
  * representation of data item.  For example back to back map operations.
  */
 object EliminateSerialization extends Rule[LogicalPlan] {
-  def apply(plan: LogicalPlan): LogicalPlan = plan transform {
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM EliminateSerialization") {
+    plan transform {
     case d @ DeserializeToObject(_, _, s: SerializeFromObject)
       if d.outputObjAttr.dataType == s.inputObjAttr.dataType =>
       // Adds an extra Project here, to preserve the output expr id of `DeserializeToObject`.
       // We will remove it later in RemoveAliasOnlyProject rule.
+      CustomLogger.logMatchTime("DARSHANA Match EliminateSerialization", true) {
       val objAttr = Alias(s.inputObjAttr, s.inputObjAttr.name)(exprId = d.outputObjAttr.exprId)
-      Project(objAttr :: Nil, s.child)
+      Project(objAttr :: Nil, s.child)}
 
     case a @ AppendColumns(_, _, _, _, _, s: SerializeFromObject)
       if a.deserializer.dataType == s.inputObjAttr.dataType =>
-      AppendColumnsWithObject(a.func, s.serializer, a.serializer, s.child)
+      CustomLogger.logMatchTime("DARSHANA Match EliminateSerialization", true) {
+      AppendColumnsWithObject(a.func, s.serializer, a.serializer, s.child)}
 
     // If there is a `SerializeFromObject` under typed filter and its input object type is same with
     // the typed filter's deserializer, we can convert typed filter to normal filter without
@@ -54,7 +59,8 @@ object EliminateSerialization extends Rule[LogicalPlan] {
     // but `ds.map(...).as[AnotherType].filter(...)` can not be optimized.
     case f @ TypedFilter(_, _, _, _, s: SerializeFromObject)
       if f.deserializer.dataType == s.inputObjAttr.dataType =>
-      s.copy(child = f.withObjectProducerChild(s.child))
+      CustomLogger.logMatchTime("DARSHANA Match EliminateSerialization", true) {
+      s.copy(child = f.withObjectProducerChild(s.child))}
 
     // If there is a `DeserializeToObject` upon typed filter and its output object type is same with
     // the typed filter's deserializer, we can convert typed filter to normal filter without
@@ -63,8 +69,9 @@ object EliminateSerialization extends Rule[LogicalPlan] {
     // but `ds.filter(...).as[AnotherType].map(...)` can not be optimized.
     case d @ DeserializeToObject(_, _, f: TypedFilter)
       if d.outputObjAttr.dataType == f.deserializer.dataType =>
-      f.withObjectProducerChild(d.copy(child = f.child))
-  }
+      CustomLogger.logMatchTime("DARSHANA Match EliminateSerialization", true) {
+      f.withObjectProducerChild(d.copy(child = f.child))}
+  }}
 }
 
 /**
@@ -72,16 +79,19 @@ object EliminateSerialization extends Rule[LogicalPlan] {
  * merging the filter functions into one conjunctive function.
  */
 object CombineTypedFilters extends Rule[LogicalPlan] {
-  def apply(plan: LogicalPlan): LogicalPlan = plan transform {
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM CombineTypedFilters") {
+    plan transform {
     case t1 @ TypedFilter(_, _, _, _, t2 @ TypedFilter(_, _, _, _, child))
         if t1.deserializer.dataType == t2.deserializer.dataType =>
+      CustomLogger.logMatchTime("DARSHANA Match CombineTypedFilters", true) {
       TypedFilter(
         combineFilterFunction(t2.func, t1.func),
         t1.argumentClass,
         t1.argumentSchema,
         t1.deserializer,
-        child)
-  }
+        child)}
+  }}
 
   private def combineFilterFunction(func1: AnyRef, func2: AnyRef): Any => Boolean = {
     (func1, func2) match {
@@ -108,9 +118,13 @@ object CombineTypedFilters extends Rule[LogicalPlan] {
  *   2. no custom collection class specified representation of data item.
  */
 object EliminateMapObjects extends Rule[LogicalPlan] {
-  def apply(plan: LogicalPlan): LogicalPlan = plan transformAllExpressions {
-     case MapObjects(_, LambdaVariable(_, _, false, _), inputData, None) => inputData
-  }
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM EliminateMapObjects") {
+    plan transformAllExpressions {
+     case MapObjects(_, LambdaVariable(_, _, false, _), inputData, None) =>
+      CustomLogger.logMatchTime("DARSHANA Match EliminateMapObjects", true) {
+        inputData}
+  }}
 }
 
 /**
@@ -207,9 +221,12 @@ object ObjectSerializerPruning extends Rule[LogicalPlan] {
     }
   }
 
-  def apply(plan: LogicalPlan): LogicalPlan = plan transform {
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM ObjectSerializerPruning") {
+    plan transform {
     case p @ Project(_, s: SerializeFromObject) =>
       // Prunes individual serializer if it is not used at all by above projection.
+      CustomLogger.logMatchTime("DARSHANA Match ObjectSerializerPruning", true) {
       val usedRefs = p.references
       val prunedSerializer = s.serializer.filter(usedRefs.contains)
 
@@ -232,8 +249,8 @@ object ObjectSerializerPruning extends Rule[LogicalPlan] {
           child = SerializeFromObject(nestedPrunedSerializer, s.child))
       } else {
         p.copy(child = SerializeFromObject(prunedSerializer, s.child))
-      }
-  }
+      }}
+  }}
 }
 
 /**
@@ -251,21 +268,24 @@ object ReassignLambdaVariableID extends Rule[LogicalPlan] {
     // and we should fail earlier.
     var hasNegativeIds = false
     var hasPositiveIds = false
-
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM ReassignLambdaVariableID") {
     plan.transformAllExpressions {
       case lr: LambdaVariable if lr.id == 0 =>
-        throw new IllegalStateException("LambdaVariable should never has 0 as its ID.")
+        CustomLogger.logMatchTime("DARSHANA Match ReassignLambdaVariableID", true) {
+        throw new IllegalStateException("LambdaVariable should never has 0 as its ID.")}
 
       case lr: LambdaVariable if lr.id < 0 =>
+        CustomLogger.logMatchTime("DARSHANA Match ReassignLambdaVariableID", true) {
         hasNegativeIds = true
         if (hasPositiveIds) {
           throw new IllegalStateException(
             "LambdaVariable IDs in a query should be all positive or negative.")
 
         }
-        lr
+        lr}
 
       case lr: LambdaVariable if lr.id > 0 =>
+        CustomLogger.logMatchTime("DARSHANA Match ReassignLambdaVariableID", true) {
         hasPositiveIds = true
         if (hasNegativeIds) {
           throw new IllegalStateException(
@@ -280,7 +300,7 @@ object ReassignLambdaVariableID extends Rule[LogicalPlan] {
           newId -= 1
           oldIdToNewId(lr.id) = newId
           lr.copy(id = newId)
-        }
-    }
+        }}
+    }}
   }
 }

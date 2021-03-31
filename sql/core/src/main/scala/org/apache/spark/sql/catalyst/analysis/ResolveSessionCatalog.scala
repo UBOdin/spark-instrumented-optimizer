@@ -18,7 +18,7 @@
 package org.apache.spark.sql.catalyst.analysis
 
 import org.apache.spark.sql.SaveMode
-import org.apache.spark.sql.catalyst.{FunctionIdentifier, TableIdentifier}
+import org.apache.spark.sql.catalyst.{CustomLogger, FunctionIdentifier, TableIdentifier}
 import org.apache.spark.sql.catalyst.catalog.{BucketSpec, CatalogStorageFormat, CatalogTable, CatalogTableType, CatalogUtils}
 import org.apache.spark.sql.catalyst.expressions.{Alias, Attribute}
 import org.apache.spark.sql.catalyst.plans.logical._
@@ -45,9 +45,12 @@ class ResolveSessionCatalog(val catalogManager: CatalogManager)
   import org.apache.spark.sql.connector.catalog.CatalogV2Util._
   import org.apache.spark.sql.execution.datasources.v2.DataSourceV2Implicits._
 
-  override def apply(plan: LogicalPlan): LogicalPlan = plan.resolveOperatorsUp {
+  override def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM ResolveSessionCatalog") {
+      plan.resolveOperatorsUp {
     case AlterTableAddColumnsStatement(
          nameParts @ SessionCatalogAndTable(catalog, tbl), cols) =>
+      CustomLogger.logMatchTime("DARSHANA Match 1 ResolveSessionCatalog", true) {
       cols.foreach(c => failNullType(c.dataType))
       loadTable(catalog, tbl.asIdentifier).collect {
         case v1Table: V1Table =>
@@ -68,10 +71,11 @@ class ResolveSessionCatalog(val catalogManager: CatalogManager)
             col.position.orNull)
         }
         createAlterTable(nameParts, catalog, tbl, changes)
-      }
+      }}
 
     case AlterTableReplaceColumnsStatement(
         nameParts @ SessionCatalogAndTable(catalog, tbl), cols) =>
+      CustomLogger.logMatchTime("DARSHANA Match 2 ResolveSessionCatalog", true) {
       cols.foreach(c => failNullType(c.dataType))
       val changes: Seq[TableChange] = loadTable(catalog, tbl.asIdentifier) match {
         case Some(_: V1Table) =>
@@ -92,11 +96,12 @@ class ResolveSessionCatalog(val catalogManager: CatalogManager)
           deleteChanges ++ addChanges
         case None => Seq() // Unresolved table will be handled in CheckAnalysis.
       }
-      createAlterTable(nameParts, catalog, tbl, changes)
+      createAlterTable(nameParts, catalog, tbl, changes)}
 
     case a @ AlterTableAlterColumnStatement(
          nameParts @ SessionCatalogAndTable(catalog, tbl), _, _, _, _, _) =>
-      a.dataType.foreach(failNullType)
+      CustomLogger.logMatchTime("DARSHANA Match 3 ResolveSessionCatalog", true) {
+        a.dataType.foreach(failNullType)
       loadTable(catalog, tbl.asIdentifier).collect {
         case v1Table: V1Table =>
           if (a.column.length > 1) {
@@ -145,41 +150,48 @@ class ResolveSessionCatalog(val catalogManager: CatalogManager)
           catalog,
           tbl,
           typeChange.toSeq ++ nullabilityChange ++ commentChange ++ positionChange)
-      }
+      }}
 
     case AlterTableRenameColumnStatement(
          nameParts @ SessionCatalogAndTable(catalog, tbl), col, newName) =>
+      CustomLogger.logMatchTime("DARSHANA Match 4 ResolveSessionCatalog", true) {
       loadTable(catalog, tbl.asIdentifier).collect {
         case v1Table: V1Table =>
           throw QueryCompilationErrors.renameColumnOnlySupportedWithV2TableError
       }.getOrElse {
         val changes = Seq(TableChange.renameColumn(col.toArray, newName))
         createAlterTable(nameParts, catalog, tbl, changes)
-      }
+      }}
 
     case AlterTableDropColumnsStatement(
          nameParts @ SessionCatalogAndTable(catalog, tbl), cols) =>
+    CustomLogger.logMatchTime("DARSHANA Match 5 ResolveSessionCatalog", true) {
       loadTable(catalog, tbl.asIdentifier).collect {
         case v1Table: V1Table =>
           throw QueryCompilationErrors.dropColumnOnlySupportedWithV2TableError
       }.getOrElse {
         val changes = cols.map(col => TableChange.deleteColumn(col.toArray))
         createAlterTable(nameParts, catalog, tbl, changes)
-      }
+      }}
 
     case SetTableProperties(ResolvedV1TableIdentifier(ident), props) =>
-      AlterTableSetPropertiesCommand(ident.asTableIdentifier, props, isView = false)
+      CustomLogger.logMatchTime("DARSHANA Match 6 ResolveSessionCatalog", true) {
+      AlterTableSetPropertiesCommand(ident.asTableIdentifier, props, isView = false)}
 
     case UnsetTableProperties(ResolvedV1TableIdentifier(ident), keys, ifExists) =>
-      AlterTableUnsetPropertiesCommand(ident.asTableIdentifier, keys, ifExists, isView = false)
+      CustomLogger.logMatchTime("DARSHANA Match 7 ResolveSessionCatalog", true) {
+      AlterTableUnsetPropertiesCommand(ident.asTableIdentifier, keys, ifExists, isView = false)}
 
     case SetViewProperties(ResolvedView(ident, _), props) =>
-      AlterTableSetPropertiesCommand(ident.asTableIdentifier, props, isView = true)
+      CustomLogger.logMatchTime("DARSHANA Match 8 ResolveSessionCatalog", true) {
+      AlterTableSetPropertiesCommand(ident.asTableIdentifier, props, isView = true)}
 
     case UnsetViewProperties(ResolvedView(ident, _), keys, ifExists) =>
-      AlterTableUnsetPropertiesCommand(ident.asTableIdentifier, keys, ifExists, isView = true)
+      CustomLogger.logMatchTime("DARSHANA Match 9 ResolveSessionCatalog", true) {
+      AlterTableUnsetPropertiesCommand(ident.asTableIdentifier, keys, ifExists, isView = true)}
 
     case DescribeNamespace(DatabaseInSessionCatalog(db), extended, output) =>
+      CustomLogger.logMatchTime("DARSHANA Match 10 ResolveSessionCatalog", true) {
       val newOutput = if (conf.getConf(SQLConf.LEGACY_KEEP_COMMAND_OUTPUT_SCHEMA)) {
         assert(output.length == 2)
         Seq(output.head.withName("database_description_item"),
@@ -187,37 +199,44 @@ class ResolveSessionCatalog(val catalogManager: CatalogManager)
       } else {
         output
       }
-      DescribeDatabaseCommand(db, extended, newOutput)
+      DescribeDatabaseCommand(db, extended, newOutput)}
 
     case SetNamespaceProperties(DatabaseInSessionCatalog(db), properties) =>
-      AlterDatabasePropertiesCommand(db, properties)
+      CustomLogger.logMatchTime("DARSHANA Match 11 ResolveSessionCatalog", true) {
+      AlterDatabasePropertiesCommand(db, properties)}
 
     case SetNamespaceLocation(DatabaseInSessionCatalog(db), location) =>
-      AlterDatabaseSetLocationCommand(db, location)
+      CustomLogger.logMatchTime("DARSHANA Match 12 ResolveSessionCatalog", true) {
+      AlterDatabaseSetLocationCommand(db, location)}
 
     case s @ ShowNamespaces(ResolvedNamespace(cata, _), _, output) if isSessionCatalog(cata) =>
+      CustomLogger.logMatchTime("DARSHANA Match 13 ResolveSessionCatalog", true) {
       if (conf.getConf(SQLConf.LEGACY_KEEP_COMMAND_OUTPUT_SCHEMA)) {
         assert(output.length == 1)
         s.copy(output = Seq(output.head.withName("databaseName")))
       } else {
         s
-      }
+      }}
 
     case RenameTable(ResolvedV1TableOrViewIdentifier(oldName), newName, isView) =>
-      AlterTableRenameCommand(oldName.asTableIdentifier, newName.asTableIdentifier, isView)
+      CustomLogger.logMatchTime("DARSHANA Match 1 ResolveSessionCatalog", true) {
+      AlterTableRenameCommand(oldName.asTableIdentifier, newName.asTableIdentifier, isView)}
 
     // Use v1 command to describe (temp) view, as v2 catalog doesn't support view yet.
     case DescribeRelation(
          ResolvedV1TableOrViewIdentifier(ident), partitionSpec, isExtended, output) =>
-      DescribeTableCommand(ident.asTableIdentifier, partitionSpec, isExtended, output)
+      CustomLogger.logMatchTime("DARSHANA Match 1 ResolveSessionCatalog", true) {
+      DescribeTableCommand(ident.asTableIdentifier, partitionSpec, isExtended, output)}
 
     case DescribeColumn(
          ResolvedViewIdentifier(ident), column: UnresolvedAttribute, isExtended, output) =>
       // For views, the column will not be resolved by `ResolveReferences` because
       // `ResolvedView` stores only the identifier.
-      DescribeColumnCommand(ident.asTableIdentifier, column.nameParts, isExtended, output)
+      CustomLogger.logMatchTime("DARSHANA Match 1 ResolveSessionCatalog", true) {
+      DescribeColumnCommand(ident.asTableIdentifier, column.nameParts, isExtended, output)}
 
     case DescribeColumn(ResolvedV1TableIdentifier(ident), column, isExtended, output) =>
+      CustomLogger.logMatchTime("DARSHANA Match 1 ResolveSessionCatalog", true) {
       column match {
         case u: UnresolvedAttribute =>
           throw QueryCompilationErrors.columnDoesNotExistError(u.name)
@@ -228,12 +247,13 @@ class ResolveSessionCatalog(val catalogManager: CatalogManager)
             "DESC TABLE COLUMN", toPrettySQL(child))
         case _ =>
           throw new IllegalStateException(s"[BUG] unexpected column expression: $column")
-      }
+      }}
 
     // For CREATE TABLE [AS SELECT], we should use the v1 command if the catalog is resolved to the
     // session catalog and the table provider is not v2.
     case c @ CreateTableStatement(
          SessionCatalogAndTable(catalog, tbl), _, _, _, _, _, _, _, _, _, _, _) =>
+      CustomLogger.logMatchTime("DARSHANA Match 1 ResolveSessionCatalog", true) {
       assertNoNullTypeInSchema(c.tableSchema)
       val (storageFormat, provider) = getStorageFormatAndProvider(
         c.provider, c.options, c.location, c.serde, ctas = false)
@@ -252,10 +272,11 @@ class ResolveSessionCatalog(val catalogManager: CatalogManager)
           c.partitioning ++ c.bucketSpec.map(_.asTransform),
           convertTableProperties(c),
           ignoreIfExists = c.ifNotExists)
-      }
+      }}
 
     case c @ CreateTableAsSelectStatement(
          SessionCatalogAndTable(catalog, tbl), _, _, _, _, _, _, _, _, _, _, _, _) =>
+      CustomLogger.logMatchTime("DARSHANA Match 1 ResolveSessionCatalog", true) {
       if (c.asSelect.resolved) {
         assertNoNullTypeInSchema(c.asSelect.schema)
       }
@@ -277,18 +298,21 @@ class ResolveSessionCatalog(val catalogManager: CatalogManager)
           convertTableProperties(c),
           writeOptions = c.writeOptions,
           ignoreIfExists = c.ifNotExists)
-      }
+      }}
 
     case RefreshTable(ResolvedV1TableIdentifier(ident)) =>
-      RefreshTableCommand(ident.asTableIdentifier)
+      CustomLogger.logMatchTime("DARSHANA Match 1 ResolveSessionCatalog", true) {
+      RefreshTableCommand(ident.asTableIdentifier)}
 
     case RefreshTable(r: ResolvedView) =>
-      RefreshTableCommand(r.identifier.asTableIdentifier)
+      CustomLogger.logMatchTime("DARSHANA Match 1 ResolveSessionCatalog", true) {
+      RefreshTableCommand(r.identifier.asTableIdentifier)}
 
     // For REPLACE TABLE [AS SELECT], we should fail if the catalog is resolved to the
     // session catalog and the table provider is not v2.
     case c @ ReplaceTableStatement(
          SessionCatalogAndTable(catalog, tbl), _, _, _, _, _, _, _, _, _, _) =>
+      CustomLogger.logMatchTime("DARSHANA Match 1 ResolveSessionCatalog", true) {
       assertNoNullTypeInSchema(c.tableSchema)
       val provider = c.provider.getOrElse(conf.defaultDataSourceName)
       if (!isV2Provider(provider)) {
@@ -302,10 +326,11 @@ class ResolveSessionCatalog(val catalogManager: CatalogManager)
           c.partitioning ++ c.bucketSpec.map(_.asTransform),
           convertTableProperties(c),
           orCreate = c.orCreate)
-      }
+      }}
 
     case c @ ReplaceTableAsSelectStatement(
          SessionCatalogAndTable(catalog, tbl), _, _, _, _, _, _, _, _, _, _, _) =>
+      CustomLogger.logMatchTime("DARSHANA Match 1 ResolveSessionCatalog", true) {
       if (c.asSelect.resolved) {
         assertNoNullTypeInSchema(c.asSelect.schema)
       }
@@ -322,23 +347,27 @@ class ResolveSessionCatalog(val catalogManager: CatalogManager)
           convertTableProperties(c),
           writeOptions = c.writeOptions,
           orCreate = c.orCreate)
-      }
+      }}
 
     case DropTable(ResolvedV1TableIdentifier(ident), ifExists, purge) =>
-      DropTableCommand(ident.asTableIdentifier, ifExists, isView = false, purge = purge)
+      CustomLogger.logMatchTime("DARSHANA Match 1 ResolveSessionCatalog", true) {
+      DropTableCommand(ident.asTableIdentifier, ifExists, isView = false, purge = purge)}
 
     // v1 DROP TABLE supports temp view.
     case DropTable(r: ResolvedView, ifExists, purge) =>
+      CustomLogger.logMatchTime("DARSHANA Match 1 ResolveSessionCatalog", true) {
       if (!r.isTemp) {
         throw QueryCompilationErrors.cannotDropViewWithDropTableError
       }
-      DropTableCommand(r.identifier.asTableIdentifier, ifExists, isView = false, purge = purge)
+      DropTableCommand(r.identifier.asTableIdentifier, ifExists, isView = false, purge = purge)}
 
     case DropView(r: ResolvedView, ifExists) =>
-      DropTableCommand(r.identifier.asTableIdentifier, ifExists, isView = true, purge = false)
+      CustomLogger.logMatchTime("DARSHANA Match 1 ResolveSessionCatalog", true) {
+      DropTableCommand(r.identifier.asTableIdentifier, ifExists, isView = true, purge = false)}
 
     case c @ CreateNamespaceStatement(CatalogAndNamespace(catalog, ns), _, _)
         if isSessionCatalog(catalog) =>
+      CustomLogger.logMatchTime("DARSHANA Match 1 ResolveSessionCatalog", true) {
       if (ns.length != 1) {
         throw QueryCompilationErrors.invalidDatabaseNameError(ns.quoted)
       }
@@ -346,25 +375,28 @@ class ResolveSessionCatalog(val catalogManager: CatalogManager)
       val comment = c.properties.get(SupportsNamespaces.PROP_COMMENT)
       val location = c.properties.get(SupportsNamespaces.PROP_LOCATION)
       val newProperties = c.properties -- CatalogV2Util.NAMESPACE_RESERVED_PROPERTIES
-      CreateDatabaseCommand(ns.head, c.ifNotExists, location, comment, newProperties)
+      CreateDatabaseCommand(ns.head, c.ifNotExists, location, comment, newProperties)}
 
     case d @ DropNamespace(DatabaseInSessionCatalog(db), _, _) =>
-      DropDatabaseCommand(db, d.ifExists, d.cascade)
+      CustomLogger.logMatchTime("DARSHANA Match 1 ResolveSessionCatalog", true) {
+      DropDatabaseCommand(db, d.ifExists, d.cascade)}
 
     case ShowTables(DatabaseInSessionCatalog(db), pattern, output) =>
+      CustomLogger.logMatchTime("DARSHANA Match 1 ResolveSessionCatalog", true) {
       val newOutput = if (conf.getConf(SQLConf.LEGACY_KEEP_COMMAND_OUTPUT_SCHEMA)) {
         assert(output.length == 3)
         output.head.withName("database") +: output.tail
       } else {
         output
       }
-      ShowTablesCommand(Some(db), pattern, newOutput)
+      ShowTablesCommand(Some(db), pattern, newOutput)}
 
     case ShowTableExtended(
         DatabaseInSessionCatalog(db),
         pattern,
         partitionSpec @ (None | Some(UnresolvedPartitionSpec(_, _))),
         output) =>
+      CustomLogger.logMatchTime("DARSHANA Match 1 ResolveSessionCatalog", true) {
       val newOutput = if (conf.getConf(SQLConf.LEGACY_KEEP_COMMAND_OUTPUT_SCHEMA)) {
         assert(output.length == 4)
         output.head.withName("database") +: output.tail
@@ -372,57 +404,67 @@ class ResolveSessionCatalog(val catalogManager: CatalogManager)
         output
       }
       val tablePartitionSpec = partitionSpec.map(_.asInstanceOf[UnresolvedPartitionSpec].spec)
-      ShowTablesCommand(Some(db), Some(pattern), newOutput, true, tablePartitionSpec)
+      ShowTablesCommand(Some(db), Some(pattern), newOutput, true, tablePartitionSpec)}
 
     // ANALYZE TABLE works on permanent views if the views are cached.
     case AnalyzeTable(ResolvedV1TableOrViewIdentifier(ident), partitionSpec, noScan) =>
+      CustomLogger.logMatchTime("DARSHANA Match 1 ResolveSessionCatalog", true) {
       if (partitionSpec.isEmpty) {
         AnalyzeTableCommand(ident.asTableIdentifier, noScan)
       } else {
         AnalyzePartitionCommand(ident.asTableIdentifier, partitionSpec, noScan)
-      }
+      }}
 
     case AnalyzeTables(DatabaseInSessionCatalog(db), noScan) =>
-      AnalyzeTablesCommand(Some(db), noScan)
+      CustomLogger.logMatchTime("DARSHANA Match 1 ResolveSessionCatalog", true) {
+      AnalyzeTablesCommand(Some(db), noScan)}
 
     case AnalyzeColumn(ResolvedV1TableOrViewIdentifier(ident), columnNames, allColumns) =>
-      AnalyzeColumnCommand(ident.asTableIdentifier, columnNames, allColumns)
+      CustomLogger.logMatchTime("DARSHANA Match 1 ResolveSessionCatalog", true) {
+      AnalyzeColumnCommand(ident.asTableIdentifier, columnNames, allColumns)}
 
     case RepairTable(ResolvedV1TableIdentifier(ident), addPartitions, dropPartitions) =>
-      RepairTableCommand(ident.asTableIdentifier, addPartitions, dropPartitions)
+      CustomLogger.logMatchTime("DARSHANA Match 1 ResolveSessionCatalog", true) {
+      RepairTableCommand(ident.asTableIdentifier, addPartitions, dropPartitions)}
 
     case LoadData(ResolvedV1TableIdentifier(ident), path, isLocal, isOverwrite, partition) =>
+      CustomLogger.logMatchTime("DARSHANA Match 1 ResolveSessionCatalog", true) {
       LoadDataCommand(
         ident.asTableIdentifier,
         path,
         isLocal,
         isOverwrite,
-        partition)
+        partition)}
 
     case ShowCreateTable(ResolvedV1TableOrViewIdentifier(ident), asSerde, output) =>
+      CustomLogger.logMatchTime("DARSHANA Match 1 ResolveSessionCatalog", true) {
       if (asSerde) {
         ShowCreateTableAsSerdeCommand(ident.asTableIdentifier, output)
       } else {
         ShowCreateTableCommand(ident.asTableIdentifier, output)
-      }
+      }}
 
     case TruncateTable(ResolvedV1TableIdentifier(ident)) =>
-      TruncateTableCommand(ident.asTableIdentifier, None)
+      CustomLogger.logMatchTime("DARSHANA Match 1 ResolveSessionCatalog", true) {
+      TruncateTableCommand(ident.asTableIdentifier, None)}
 
     case TruncatePartition(ResolvedV1TableIdentifier(ident), partitionSpec) =>
+      CustomLogger.logMatchTime("DARSHANA Match 1 ResolveSessionCatalog", true) {
       TruncateTableCommand(
         ident.asTableIdentifier,
-        Seq(partitionSpec).asUnresolvedPartitionSpecs.map(_.spec).headOption)
+        Seq(partitionSpec).asUnresolvedPartitionSpecs.map(_.spec).headOption)}
 
     case s @ ShowPartitions(
         ResolvedV1TableOrViewIdentifier(ident),
         pattern @ (None | Some(UnresolvedPartitionSpec(_, _))), output) =>
+    CustomLogger.logMatchTime("DARSHANA Match 1 ResolveSessionCatalog", true) {
       ShowPartitionsCommand(
         ident.asTableIdentifier,
         output,
-        pattern.map(_.asInstanceOf[UnresolvedPartitionSpec].spec))
+        pattern.map(_.asInstanceOf[UnresolvedPartitionSpec].spec))}
 
     case s @ ShowColumns(ResolvedV1TableOrViewIdentifier(ident), ns, output) =>
+      CustomLogger.logMatchTime("DARSHANA Match 1 ResolveSessionCatalog", true) {
       val v1TableName = ident.asTableIdentifier
       val resolver = conf.resolver
       val db = ns match {
@@ -430,60 +472,67 @@ class ResolveSessionCatalog(val catalogManager: CatalogManager)
           throw QueryCompilationErrors.showColumnsWithConflictDatabasesError(db, v1TableName)
         case _ => ns.map(_.head)
       }
-      ShowColumnsCommand(db, v1TableName, output)
+      ShowColumnsCommand(db, v1TableName, output)}
 
     case RecoverPartitions(ResolvedV1TableIdentifier(ident)) =>
+      CustomLogger.logMatchTime("DARSHANA Match 1 ResolveSessionCatalog", true) {
       RepairTableCommand(
         ident.asTableIdentifier,
         enableAddPartitions = true,
         enableDropPartitions = false,
-        "ALTER TABLE RECOVER PARTITIONS")
+        "ALTER TABLE RECOVER PARTITIONS")}
 
     case AddPartitions(ResolvedV1TableIdentifier(ident), partSpecsAndLocs, ifNotExists) =>
+      CustomLogger.logMatchTime("DARSHANA Match 1 ResolveSessionCatalog", true) {
       AlterTableAddPartitionCommand(
         ident.asTableIdentifier,
         partSpecsAndLocs.asUnresolvedPartitionSpecs.map(spec => (spec.spec, spec.location)),
-        ifNotExists)
+        ifNotExists)}
 
     case RenamePartitions(
         ResolvedV1TableIdentifier(ident),
         UnresolvedPartitionSpec(from, _),
         UnresolvedPartitionSpec(to, _)) =>
-      AlterTableRenamePartitionCommand(ident.asTableIdentifier, from, to)
+    CustomLogger.logMatchTime("DARSHANA Match 1 ResolveSessionCatalog", true) {
+      AlterTableRenamePartitionCommand(ident.asTableIdentifier, from, to)}
 
     case DropPartitions(
         ResolvedV1TableIdentifier(ident), specs, ifExists, purge) =>
+    CustomLogger.logMatchTime("DARSHANA Match 1 ResolveSessionCatalog", true) {
       AlterTableDropPartitionCommand(
         ident.asTableIdentifier,
         specs.asUnresolvedPartitionSpecs.map(_.spec),
         ifExists,
         purge,
-        retainData = false)
+        retainData = false)}
 
     case SetTableSerDeProperties(
         ResolvedV1TableIdentifier(ident),
         serdeClassName,
         serdeProperties,
         partitionSpec) =>
+    CustomLogger.logMatchTime("DARSHANA Match 1 ResolveSessionCatalog", true) {
       AlterTableSerDePropertiesCommand(
         ident.asTableIdentifier,
         serdeClassName,
         serdeProperties,
-        partitionSpec)
+        partitionSpec)}
 
     case SetTableLocation(ResolvedV1TableIdentifier(ident), partitionSpec, location) =>
-      AlterTableSetLocationCommand(ident.asTableIdentifier, partitionSpec, location)
+      CustomLogger.logMatchTime("DARSHANA Match 1 ResolveSessionCatalog", true) {
+      AlterTableSetLocationCommand(ident.asTableIdentifier, partitionSpec, location)}
 
     case AlterViewAs(ResolvedView(ident, _), originalText, query) if query.resolved =>
+      CustomLogger.logMatchTime("DARSHANA Match 1 ResolveSessionCatalog", true) {
       AlterViewAsCommand(
         ident.asTableIdentifier,
         originalText,
-        query)
+        query)}
 
     case CreateViewStatement(
       tbl, userSpecifiedColumns, comment, properties,
       originalText, child, allowExisting, replace, viewType) if child.resolved =>
-
+    CustomLogger.logMatchTime("DARSHANA Match 1 ResolveSessionCatalog", true) {
       val v1TableName = if (viewType != PersistedView) {
         // temp view doesn't belong to any catalog and we shouldn't resolve catalog in the name.
         tbl
@@ -499,16 +548,18 @@ class ResolveSessionCatalog(val catalogManager: CatalogManager)
         child,
         allowExisting,
         replace,
-        viewType)
+        viewType)}
 
     case ShowViews(resolved: ResolvedNamespace, pattern, output) =>
+      CustomLogger.logMatchTime("DARSHANA Match 1 ResolveSessionCatalog", true) {
       resolved match {
         case DatabaseInSessionCatalog(db) => ShowViewsCommand(db, pattern, output)
         case _ =>
           throw QueryCompilationErrors.externalCatalogNotSupportShowViewsError(resolved)
-      }
+      }}
 
     case s @ ShowTableProperties(ResolvedV1TableOrViewIdentifier(ident), propertyKey, output) =>
+      CustomLogger.logMatchTime("DARSHANA Match 1 ResolveSessionCatalog", true) {
       val newOutput =
         if (conf.getConf(SQLConf.LEGACY_KEEP_COMMAND_OUTPUT_SCHEMA) && propertyKey.isDefined) {
           assert(output.length == 2)
@@ -516,25 +567,30 @@ class ResolveSessionCatalog(val catalogManager: CatalogManager)
         } else {
           output
         }
-      ShowTablePropertiesCommand(ident.asTableIdentifier, propertyKey, newOutput)
+      ShowTablePropertiesCommand(ident.asTableIdentifier, propertyKey, newOutput)}
 
     case DescribeFunction(ResolvedFunc(identifier), extended) =>
-      DescribeFunctionCommand(identifier.asFunctionIdentifier, extended)
+      CustomLogger.logMatchTime("DARSHANA Match 1 ResolveSessionCatalog", true) {
+      DescribeFunctionCommand(identifier.asFunctionIdentifier, extended)}
 
     case ShowFunctions(None, userScope, systemScope, pattern, output) =>
-      ShowFunctionsCommand(None, pattern, userScope, systemScope, output)
+      CustomLogger.logMatchTime("DARSHANA Match 1 ResolveSessionCatalog", true) {
+      ShowFunctionsCommand(None, pattern, userScope, systemScope, output)}
 
     case ShowFunctions(Some(ResolvedFunc(identifier)), userScope, systemScope, _, output) =>
+      CustomLogger.logMatchTime("DARSHANA Match 1 ResolveSessionCatalog", true) {
       val funcIdentifier = identifier.asFunctionIdentifier
       ShowFunctionsCommand(
-        funcIdentifier.database, Some(funcIdentifier.funcName), userScope, systemScope, output)
+        funcIdentifier.database, Some(funcIdentifier.funcName), userScope, systemScope, output)}
 
     case DropFunction(ResolvedFunc(identifier), ifExists, isTemp) =>
+      CustomLogger.logMatchTime("DARSHANA Match 1 ResolveSessionCatalog", true) {
       val funcIdentifier = identifier.asFunctionIdentifier
-      DropFunctionCommand(funcIdentifier.database, funcIdentifier.funcName, ifExists, isTemp)
+      DropFunctionCommand(funcIdentifier.database, funcIdentifier.funcName, ifExists, isTemp)}
 
     case CreateFunctionStatement(nameParts,
       className, resources, isTemp, ignoreIfExists, replace) =>
+    CustomLogger.logMatchTime("DARSHANA Match 1 ResolveSessionCatalog", true) {
       if (isTemp) {
         // temp func doesn't belong to any catalog and we shouldn't resolve catalog in the name.
         val database = if (nameParts.length > 2) {
@@ -557,13 +613,14 @@ class ResolveSessionCatalog(val catalogManager: CatalogManager)
           parseSessionCatalogFunctionIdentifier(nameParts)
         CreateFunctionCommand(database, function, className, resources, isTemp, ignoreIfExists,
           replace)
-      }
+      }}
 
     case RefreshFunction(ResolvedFunc(identifier)) =>
+      CustomLogger.logMatchTime("DARSHANA Match 1 ResolveSessionCatalog", true) {
       // Fallback to v1 command
       val funcIdentifier = identifier.asFunctionIdentifier
-      RefreshFunctionCommand(funcIdentifier.database, funcIdentifier.funcName)
-  }
+      RefreshFunctionCommand(funcIdentifier.database, funcIdentifier.funcName)}
+  }}
 
   private def parseV1Table(tableName: Seq[String], sql: String): Seq[String] = tableName match {
     case SessionCatalogAndTable(_, tbl) => tbl

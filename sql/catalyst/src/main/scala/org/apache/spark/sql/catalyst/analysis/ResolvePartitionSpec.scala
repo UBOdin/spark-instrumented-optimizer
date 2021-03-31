@@ -17,6 +17,7 @@
 
 package org.apache.spark.sql.catalyst.analysis
 
+import org.apache.spark.sql.catalyst.CustomLogger
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.catalog.CatalogTypes.TablePartitionSpec
 import org.apache.spark.sql.catalyst.expressions.{Cast, Literal}
@@ -32,8 +33,11 @@ import org.apache.spark.sql.util.PartitioningUtils.{normalizePartitionSpec, requ
  */
 object ResolvePartitionSpec extends Rule[LogicalPlan] {
 
-  def apply(plan: LogicalPlan): LogicalPlan = plan resolveOperators {
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM ResolvePartitionSpec") {
+    plan resolveOperators {
     case command: V2PartitionCommand if command.childrenResolved && !command.resolved =>
+      CustomLogger.logMatchTime("DARSHANA Match ResolvePartitionSpec", true) {
       command.table match {
         case r @ ResolvedTable(_, _, table: SupportsPartitionManagement, _) =>
           command.transformExpressions {
@@ -46,8 +50,8 @@ object ResolvePartitionSpec extends Rule[LogicalPlan] {
                 command.allowPartialPartitionSpec)
           }
         case _ => command
-      }
-  }
+      }}
+  }}
 
   private def resolvePartitionSpec(
       tableName: String,

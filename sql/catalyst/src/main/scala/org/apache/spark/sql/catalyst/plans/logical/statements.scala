@@ -20,7 +20,6 @@ package org.apache.spark.sql.catalyst.plans.logical
 import org.apache.spark.sql.catalyst.analysis.ViewType
 import org.apache.spark.sql.catalyst.catalog.{BucketSpec, FunctionResource}
 import org.apache.spark.sql.catalyst.expressions.Attribute
-import org.apache.spark.sql.catalyst.trees.{LeafLike, UnaryLike}
 import org.apache.spark.sql.connector.catalog.TableChange.ColumnPosition
 import org.apache.spark.sql.connector.expressions.Transform
 import org.apache.spark.sql.types.{DataType, StructType}
@@ -48,11 +47,10 @@ abstract class ParsedStatement extends LogicalPlan {
 
   override def output: Seq[Attribute] = Seq.empty
 
+  override def children: Seq[LogicalPlan] = Seq.empty
+
   final override lazy val resolved = false
 }
-
-trait LeafParsedStatement extends ParsedStatement with LeafLike[LogicalPlan]
-trait UnaryParsedStatement extends ParsedStatement with UnaryLike[LogicalPlan]
 
 /**
  * Type to keep track of Hive serde info
@@ -146,7 +144,7 @@ case class CreateTableStatement(
     comment: Option[String],
     serde: Option[SerdeInfo],
     external: Boolean,
-    ifNotExists: Boolean) extends LeafParsedStatement
+    ifNotExists: Boolean) extends ParsedStatement
 
 /**
  * A CREATE TABLE AS SELECT command, as parsed from SQL.
@@ -164,9 +162,9 @@ case class CreateTableAsSelectStatement(
     writeOptions: Map[String, String],
     serde: Option[SerdeInfo],
     external: Boolean,
-    ifNotExists: Boolean) extends UnaryParsedStatement {
+    ifNotExists: Boolean) extends ParsedStatement {
 
-  override def child: LogicalPlan = asSelect
+  override def children: Seq[LogicalPlan] = Seq(asSelect)
 }
 
 /**
@@ -181,7 +179,10 @@ case class CreateViewStatement(
     child: LogicalPlan,
     allowExisting: Boolean,
     replace: Boolean,
-    viewType: ViewType) extends UnaryParsedStatement
+    viewType: ViewType) extends ParsedStatement {
+
+  override def children: Seq[LogicalPlan] = Seq(child)
+}
 
 /**
  * A REPLACE TABLE command, as parsed from SQL.
@@ -200,7 +201,7 @@ case class ReplaceTableStatement(
     location: Option[String],
     comment: Option[String],
     serde: Option[SerdeInfo],
-    orCreate: Boolean) extends LeafParsedStatement
+    orCreate: Boolean) extends ParsedStatement
 
 /**
  * A REPLACE TABLE AS SELECT command, as parsed from SQL.
@@ -217,9 +218,9 @@ case class ReplaceTableAsSelectStatement(
     comment: Option[String],
     writeOptions: Map[String, String],
     serde: Option[SerdeInfo],
-    orCreate: Boolean) extends UnaryParsedStatement {
+    orCreate: Boolean) extends ParsedStatement {
 
-  override def child: LogicalPlan = asSelect
+  override def children: Seq[LogicalPlan] = Seq(asSelect)
 }
 
 
@@ -238,11 +239,11 @@ case class QualifiedColType(
  */
 case class AlterTableAddColumnsStatement(
     tableName: Seq[String],
-    columnsToAdd: Seq[QualifiedColType]) extends LeafParsedStatement
+    columnsToAdd: Seq[QualifiedColType]) extends ParsedStatement
 
 case class AlterTableReplaceColumnsStatement(
     tableName: Seq[String],
-    columnsToAdd: Seq[QualifiedColType]) extends LeafParsedStatement
+    columnsToAdd: Seq[QualifiedColType]) extends ParsedStatement
 
 /**
  * ALTER TABLE ... CHANGE COLUMN command, as parsed from SQL.
@@ -253,7 +254,7 @@ case class AlterTableAlterColumnStatement(
     dataType: Option[DataType],
     nullable: Option[Boolean],
     comment: Option[String],
-    position: Option[ColumnPosition]) extends LeafParsedStatement
+    position: Option[ColumnPosition]) extends ParsedStatement
 
 /**
  * ALTER TABLE ... RENAME COLUMN command, as parsed from SQL.
@@ -261,14 +262,14 @@ case class AlterTableAlterColumnStatement(
 case class AlterTableRenameColumnStatement(
     tableName: Seq[String],
     column: Seq[String],
-    newName: String) extends LeafParsedStatement
+    newName: String) extends ParsedStatement
 
 /**
  * ALTER TABLE ... DROP COLUMNS command, as parsed from SQL.
  */
 case class AlterTableDropColumnsStatement(
     tableName: Seq[String],
-    columnsToDrop: Seq[Seq[String]]) extends LeafParsedStatement
+    columnsToDrop: Seq[Seq[String]]) extends ParsedStatement
 
 /**
  * An INSERT INTO statement, as parsed from SQL.
@@ -292,14 +293,14 @@ case class InsertIntoStatement(
     userSpecifiedCols: Seq[String],
     query: LogicalPlan,
     overwrite: Boolean,
-    ifPartitionNotExists: Boolean) extends UnaryParsedStatement {
+    ifPartitionNotExists: Boolean) extends ParsedStatement {
 
   require(overwrite || !ifPartitionNotExists,
     "IF NOT EXISTS is only valid in INSERT OVERWRITE")
   require(partitionSpec.values.forall(_.nonEmpty) || !ifPartitionNotExists,
     "IF NOT EXISTS is only valid with static partitions")
 
-  override def child: LogicalPlan = query
+  override def children: Seq[LogicalPlan] = query :: Nil
 }
 
 /**
@@ -308,17 +309,17 @@ case class InsertIntoStatement(
 case class CreateNamespaceStatement(
     namespace: Seq[String],
     ifNotExists: Boolean,
-    properties: Map[String, String]) extends LeafParsedStatement
+    properties: Map[String, String]) extends ParsedStatement
 
 /**
  * A USE statement, as parsed from SQL.
  */
-case class UseStatement(isNamespaceSet: Boolean, nameParts: Seq[String]) extends LeafParsedStatement
+case class UseStatement(isNamespaceSet: Boolean, nameParts: Seq[String]) extends ParsedStatement
 
 /**
  * A SHOW CURRENT NAMESPACE statement, as parsed from SQL
  */
-case class ShowCurrentNamespaceStatement() extends LeafParsedStatement
+case class ShowCurrentNamespaceStatement() extends ParsedStatement
 
 /**
  *  CREATE FUNCTION statement, as parsed from SQL
@@ -329,4 +330,4 @@ case class CreateFunctionStatement(
     resources: Seq[FunctionResource],
     isTemp: Boolean,
     ignoreIfExists: Boolean,
-    replace: Boolean) extends LeafParsedStatement
+    replace: Boolean) extends ParsedStatement

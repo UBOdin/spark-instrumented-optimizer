@@ -20,6 +20,7 @@ package org.apache.spark.sql.catalyst.optimizer
 import scala.collection.mutable
 
 import org.apache.spark.sql.AnalysisException
+import org.apache.spark.sql.catalyst.CustomLogger
 import org.apache.spark.sql.catalyst.analysis._
 import org.apache.spark.sql.catalyst.catalog.{InMemoryCatalog, SessionCatalog}
 import org.apache.spark.sql.catalyst.expressions._
@@ -279,14 +280,17 @@ abstract class Optimizer(catalogManager: CatalogManager)
         case other => other
       }
     }
-    def apply(plan: LogicalPlan): LogicalPlan = plan transformAllExpressions {
+    def apply(plan: LogicalPlan): LogicalPlan =
+      CustomLogger.logTransformTime("DARSHANA TRANSFORM OptimizeSubqueries") {
+      plan transformAllExpressions {
       case s: SubqueryExpression =>
+        CustomLogger.logMatchTime("DARSHANA Match OptimizeSubqueries", true) {
         val Subquery(newPlan, _) = Optimizer.this.execute(Subquery.fromExpression(s))
         // At this point we have an optimized subquery plan that we are going to attach
         // to this subquery expression. Here we can safely remove any top level sort
         // in the plan as tuples produced by a subquery are un-ordered.
-        s.withNewPlan(removeTopLevelSort(newPlan))
-    }
+        s.withNewPlan(removeTopLevelSort(newPlan))}
+    }}
   }
 
   /**
@@ -353,10 +357,13 @@ abstract class Optimizer(catalogManager: CatalogManager)
  * This rule should be applied before RewriteDistinctAggregates.
  */
 object EliminateDistinct extends Rule[LogicalPlan] {
-  override def apply(plan: LogicalPlan): LogicalPlan = plan transformExpressions  {
+  override def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM EliminateDistinct") {
+    plan transformExpressions  {
     case ae: AggregateExpression if ae.isDistinct && isDuplicateAgnostic(ae.aggregateFunction) =>
-      ae.copy(isDistinct = false)
-  }
+      CustomLogger.logMatchTime("DARSHANA Match EliminateDistinct", true) {
+      ae.copy(isDistinct = false)}
+  }}
 
   private def isDuplicateAgnostic(af: AggregateFunction): Boolean = af match {
     case _: Max => true
@@ -373,20 +380,25 @@ object EliminateDistinct extends Rule[LogicalPlan] {
  * This rule should be applied before RewriteDistinctAggregates.
  */
 object EliminateAggregateFilter extends Rule[LogicalPlan] {
-  override def apply(plan: LogicalPlan): LogicalPlan = plan transformExpressions  {
+  override def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM EliminateAggregateFilter") {
+    plan transformExpressions  {
     case ae @ AggregateExpression(_, _, _, Some(Literal.TrueLiteral), _) =>
-      ae.copy(filter = None)
+      CustomLogger.logMatchTime("DARSHANA Match EliminateAggregateFilter", true) {
+      ae.copy(filter = None)}
     case AggregateExpression(af: DeclarativeAggregate, _, _, Some(Literal.FalseLiteral), _) =>
+      CustomLogger.logMatchTime("DARSHANA Match EliminateAggregateFilter", true) {
       val initialProject = SafeProjection.create(af.initialValues)
       val evalProject = SafeProjection.create(af.evaluateExpression :: Nil, af.aggBufferAttributes)
       val initialBuffer = initialProject(EmptyRow)
       val internalRow = evalProject(initialBuffer)
-      Literal.create(internalRow.get(0, af.dataType), af.dataType)
+      Literal.create(internalRow.get(0, af.dataType), af.dataType)}
     case AggregateExpression(af: ImperativeAggregate, _, _, Some(Literal.FalseLiteral), _) =>
+      CustomLogger.logMatchTime("DARSHANA Match EliminateAggregateFilter", true) {
       val buffer = new SpecificInternalRow(af.aggBufferAttributes.map(_.dataType))
       af.initialize(buffer)
-      Literal.create(af.eval(buffer), af.dataType)
-  }
+      Literal.create(af.eval(buffer), af.dataType)}
+  }}
 }
 
 /**
@@ -445,13 +457,15 @@ object RemoveRedundantAliases extends Rule[LogicalPlan] {
       // We want to keep the same output attributes for subqueries. This means we cannot remove
       // the aliases that produce these attributes
       case Subquery(child, correlated) =>
-        Subquery(removeRedundantAliases(child, excluded ++ child.outputSet), correlated)
+        CustomLogger.logMatchTime("DARSHANA: Match 1 RemoveRedundantAliases", true) {
+        Subquery(removeRedundantAliases(child, excluded ++ child.outputSet), correlated)}
 
       // A join has to be treated differently, because the left and the right side of the join are
       // not allowed to use the same attributes. We use an exclude list to prevent us from creating
       // a situation in which this happens; the rule will only remove an alias if its child
       // attribute is not on the black list.
       case Join(left, right, joinType, condition, hint) =>
+        CustomLogger.logMatchTime("DARSHANA: Match 2 RemoveRedundantAliases", true) {
         val newLeft = removeRedundantAliases(left, excluded ++ right.outputSet)
         val newRight = removeRedundantAliases(right, excluded ++ newLeft.outputSet)
         val mapping = AttributeMap(
@@ -460,10 +474,11 @@ object RemoveRedundantAliases extends Rule[LogicalPlan] {
         val newCondition = condition.map(_.transform {
           case a: Attribute => mapping.getOrElse(a, a)
         })
-        Join(newLeft, newRight, joinType, newCondition, hint)
+        Join(newLeft, newRight, joinType, newCondition, hint)}
 
       case _ =>
         // Remove redundant aliases in the subtree(s).
+        CustomLogger.logMatchTime("DARSHANA: Match 3 RemoveRedundantAliases", true) {
         val currentNextAttrPairs = mutable.Buffer.empty[(Attribute, Attribute)]
         val newNode = plan.mapChildren { child =>
           val newChild = removeRedundantAliases(child, excluded)
@@ -486,15 +501,18 @@ object RemoveRedundantAliases extends Rule[LogicalPlan] {
         }
 
         // Transform the expressions.
+
         newNode.mapExpressions { expr =>
           clean(expr.transform {
-            case a: Attribute => mapping.getOrElse(a, a)
-          })
-        }
+            case a: Attribute =>
+                mapping.getOrElse(a, a)
+          })}}
     }
   }
 
-  def apply(plan: LogicalPlan): LogicalPlan = removeRedundantAliases(plan, AttributeSet.empty)
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM RemoveRedundantAliases") {
+    removeRedundantAliases(plan, AttributeSet.empty)}
 }
 
 /**
@@ -545,13 +563,19 @@ object RemoveRedundantAggregates extends Rule[LogicalPlan] with AliasHelper {
  * Remove no-op operators from the query plan that do not make any modifications.
  */
 object RemoveNoopOperators extends Rule[LogicalPlan] {
-  def apply(plan: LogicalPlan): LogicalPlan = plan transformUp {
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA: TRANSFORM RemoveNoopOperators") {
+      plan transformUp {
     // Eliminate no-op Projects
-    case p @ Project(_, child) if child.sameOutput(p) => child
+    case p @ Project(_, child) if child.sameOutput(p) =>
+      CustomLogger.logMatchTime("DARSHANA: Match 1 RemoveNoopOperators", true) {
+        child}
 
     // Eliminate no-op Window
-    case w: Window if w.windowExpressions.isEmpty => w.child
-  }
+    case w: Window if w.windowExpressions.isEmpty =>
+      CustomLogger.logMatchTime("DARSHANA: Match 2 RemoveNoopOperators", true) {
+        w.child}
+  }}
 }
 
 /**
@@ -597,12 +621,16 @@ object RemoveNoopUnion extends Rule[LogicalPlan] {
     }
   }
 
-  def apply(plan: LogicalPlan): LogicalPlan = plan transformUp {
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM RemoveNoopUnion") {
+    plan transformUp {
     case d @ Distinct(u: Union) =>
-      d.withNewChildren(Seq(simplifyUnion(u)))
+      CustomLogger.logMatchTime("DARSHANA Match RemoveNoopUnion", true) {
+      d.withNewChildren(Seq(simplifyUnion(u)))}
     case d @ Deduplicate(_, u: Union) =>
-      d.withNewChildren(Seq(simplifyUnion(u)))
-  }
+      CustomLogger.logMatchTime("DARSHANA Match RemoveNoopUnion", true) {
+      d.withNewChildren(Seq(simplifyUnion(u)))}
+  }}
 }
 
 /**
@@ -634,21 +662,9 @@ object LimitPushDown extends Rule[LogicalPlan] {
     }
   }
 
-  private def pushLocalLimitThroughJoin(limitExpr: Expression, join: Join): Join = {
-    join.joinType match {
-      case RightOuter => join.copy(right = maybePushLocalLimit(limitExpr, join.right))
-      case LeftOuter => join.copy(left = maybePushLocalLimit(limitExpr, join.left))
-      case _: InnerLike if join.condition.isEmpty =>
-        join.copy(
-          left = maybePushLocalLimit(limitExpr, join.left),
-          right = maybePushLocalLimit(limitExpr, join.right))
-      case LeftSemi | LeftAnti if join.condition.isEmpty =>
-        join.copy(left = maybePushLocalLimit(limitExpr, join.left))
-      case _ => join
-    }
-  }
-
-  def apply(plan: LogicalPlan): LogicalPlan = plan transform {
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM LimitPushDown") {
+    plan transform {
     // Adding extra Limits below UNION ALL for children which are not Limit or do not have Limit
     // descendants whose maxRow is larger. This heuristic is valid assuming there does not exist any
     // Limit push-down rule that is unable to infer the value of maxRows.
@@ -656,8 +672,8 @@ object LimitPushDown extends Rule[LogicalPlan] {
     // pushdown Limit through it. Once we add UNION DISTINCT, however, we will not be able to
     // pushdown Limit.
     case LocalLimit(exp, u: Union) =>
-      LocalLimit(exp, u.copy(children = u.children.map(maybePushLocalLimit(exp, _))))
-
+      CustomLogger.logMatchTime("DARSHANA Match LimitPushDown", true) {
+      LocalLimit(exp, u.copy(children = u.children.map(maybePushLocalLimit(exp, _))))}
     // Add extra limits below JOIN:
     // 1. For LEFT OUTER and RIGHT OUTER JOIN, we push limits to the left and right sides,
     //    respectively.
@@ -670,12 +686,21 @@ object LimitPushDown extends Rule[LogicalPlan] {
     // introduce limits on both sides if it is applied multiple times. Therefore:
     //   - If one side is already limited, stack another limit on top if the new limit is smaller.
     //     The redundant limit will be collapsed by the CombineLimits rule.
-    case LocalLimit(exp, join: Join) =>
-      LocalLimit(exp, pushLocalLimitThroughJoin(exp, join))
-    // There is a Project between LocalLimit and Join if they do not have the same output.
-    case LocalLimit(exp, project @ Project(_, join: Join)) =>
-      LocalLimit(exp, project.copy(child = pushLocalLimitThroughJoin(exp, join)))
-  }
+    case LocalLimit(exp, join @ Join(left, right, joinType, conditionOpt, _)) =>
+      CustomLogger.logMatchTime("DARSHANA Match LimitPushDown", true) {
+      val newJoin = joinType match {
+        case RightOuter => join.copy(right = maybePushLocalLimit(exp, right))
+        case LeftOuter => join.copy(left = maybePushLocalLimit(exp, left))
+        case _: InnerLike if conditionOpt.isEmpty =>
+          join.copy(
+            left = maybePushLocalLimit(exp, left),
+            right = maybePushLocalLimit(exp, right))
+        case LeftSemi | LeftAnti if conditionOpt.isEmpty =>
+          join.copy(left = maybePushLocalLimit(exp, left))
+        case _ => join
+      }
+      LocalLimit(exp, newJoin)}
+  }}
 }
 
 /**
@@ -715,10 +740,13 @@ object PushProjectionThroughUnion extends Rule[LogicalPlan] with PredicateHelper
     result.asInstanceOf[A]
   }
 
-  def apply(plan: LogicalPlan): LogicalPlan = plan transform {
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM PushProjectionThroughUnion") {
+    plan transform {
 
     // Push down deterministic projection through UNION ALL
     case p @ Project(projectList, u: Union) =>
+      CustomLogger.logMatchTime("DARSHANA Match 1 PushProjectionThroughUnion", false) {
       assert(u.children.nonEmpty)
       if (projectList.forall(_.deterministic)) {
         val newFirstChild = Project(projectList, u.children.head)
@@ -729,8 +757,8 @@ object PushProjectionThroughUnion extends Rule[LogicalPlan] with PredicateHelper
         u.copy(children = newFirstChild +: newOtherChildren)
       } else {
         p
-      }
-  }
+      }}
+  }}
 }
 
 /**
@@ -745,58 +773,74 @@ object PushProjectionThroughUnion extends Rule[LogicalPlan] with PredicateHelper
  */
 object ColumnPruning extends Rule[LogicalPlan] {
 
-  def apply(plan: LogicalPlan): LogicalPlan = removeProjectBeforeFilter(plan transform {
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM ColumnPruning") {
+    removeProjectBeforeFilter(plan transform {
     // Prunes the unused columns from project list of Project/Aggregate/Expand
     case p @ Project(_, p2: Project) if !p2.outputSet.subsetOf(p.references) =>
-      p.copy(child = p2.copy(projectList = p2.projectList.filter(p.references.contains)))
+     CustomLogger.logMatchTime("DARSHANA Match 1 ColumnPruning", true) {
+      p.copy(child = p2.copy(projectList = p2.projectList.filter(p.references.contains)))}
     case p @ Project(_, a: Aggregate) if !a.outputSet.subsetOf(p.references) =>
+      CustomLogger.logMatchTime("DARSHANA Match 2 ColumnPruning", true) {
       p.copy(
-        child = a.copy(aggregateExpressions = a.aggregateExpressions.filter(p.references.contains)))
+      child = a.copy(aggregateExpressions = a.aggregateExpressions.filter(p.references.contains)))}
     case a @ Project(_, e @ Expand(_, _, grandChild)) if !e.outputSet.subsetOf(a.references) =>
+      CustomLogger.logMatchTime("DARSHANA Match 4 ColumnPruning", true) {
       val newOutput = e.output.filter(a.references.contains(_))
       val newProjects = e.projections.map { proj =>
         proj.zip(e.output).filter { case (_, a) =>
           newOutput.contains(a)
         }.unzip._1
       }
-      a.copy(child = Expand(newProjects, newOutput, grandChild))
+      a.copy(child = Expand(newProjects, newOutput, grandChild))}
 
     // Prunes the unused columns from child of `DeserializeToObject`
     case d @ DeserializeToObject(_, _, child) if !child.outputSet.subsetOf(d.references) =>
-      d.copy(child = prunedChild(child, d.references))
+      CustomLogger.logMatchTime("DARSHANA Match 5 ColumnPruning", true) {
+      d.copy(child = prunedChild(child, d.references))}
 
     // Prunes the unused columns from child of Aggregate/Expand/Generate/ScriptTransformation
     case a @ Aggregate(_, _, child) if !child.outputSet.subsetOf(a.references) =>
-      a.copy(child = prunedChild(child, a.references))
+      CustomLogger.logMatchTime("DARSHANA Match 6 ColumnPruning", true) {
+      a.copy(child = prunedChild(child, a.references))}
     case f @ FlatMapGroupsInPandas(_, _, _, child) if !child.outputSet.subsetOf(f.references) =>
-      f.copy(child = prunedChild(child, f.references))
+      CustomLogger.logMatchTime("DARSHANA Match 7 ColumnPruning", true) {
+      f.copy(child = prunedChild(child, f.references))}
     case e @ Expand(_, _, child) if !child.outputSet.subsetOf(e.references) =>
-      e.copy(child = prunedChild(child, e.references))
+      CustomLogger.logMatchTime("DARSHANA Match 8 ColumnPruning", true) {
+      e.copy(child = prunedChild(child, e.references))}
     case s @ ScriptTransformation(_, _, _, child, _)
         if !child.outputSet.subsetOf(s.references) =>
-      s.copy(child = prunedChild(child, s.references))
+      CustomLogger.logMatchTime("DARSHANA Match 9 ColumnPruning", true) {
+      s.copy(child = prunedChild(child, s.references))}
 
     // prune unrequired references
     case p @ Project(_, g: Generate) if p.references != g.outputSet =>
+      CustomLogger.logMatchTime("DARSHANA Match 10 ColumnPruning", true) {
       val requiredAttrs = p.references -- g.producedAttributes ++ g.generator.references
       val newChild = prunedChild(g.child, requiredAttrs)
       val unrequired = g.generator.references -- p.references
       val unrequiredIndices = newChild.output.zipWithIndex.filter(t => unrequired.contains(t._1))
         .map(_._2)
-      p.copy(child = g.copy(child = newChild, unrequiredChildIndex = unrequiredIndices))
+      p.copy(child = g.copy(child = newChild, unrequiredChildIndex = unrequiredIndices))}
 
     // prune unrequired nested fields from `Generate`.
-    case GeneratorNestedColumnAliasing(p) => p
+    case GeneratorNestedColumnAliasing(p) =>
+      CustomLogger.logMatchTime("DARSHANA Match 11 ColumnPruning", false) {p}
 
     // Eliminate unneeded attributes from right side of a Left Existence Join.
     case j @ Join(_, right, LeftExistence(_), _, _) =>
-      j.copy(right = prunedChild(right, j.references))
+      CustomLogger.logMatchTime("DARSHANA Match 12 ColumnPruning", true) {
+      j.copy(right = prunedChild(right, j.references))}
 
     // all the columns will be used to compare, so we can't prune them
-    case p @ Project(_, _: SetOperation) => p
-    case p @ Project(_, _: Distinct) => p
+    case p @ Project(_, _: SetOperation) =>
+      CustomLogger.logMatchTime("DARSHANA Match 13 ColumnPruning", false) {p}
+    case p @ Project(_, _: Distinct) =>
+      CustomLogger.logMatchTime("DARSHANA Match 14 ColumnPruning", false) {p}
     // Eliminate unneeded attributes from children of Union.
     case p @ Project(_, u: Union) =>
+      CustomLogger.logMatchTime("DARSHANA Match 15 ColumnPruning", false) {
       if (!u.outputSet.subsetOf(p.references)) {
         val firstChild = u.children.head
         val newOutput = prunedChild(firstChild, p.references).output
@@ -810,29 +854,33 @@ object ColumnPruning extends Rule[LogicalPlan] {
         p.copy(child = u.withNewChildren(newChildren))
       } else {
         p
-      }
+      }}
 
     // Prune unnecessary window expressions
     case p @ Project(_, w: Window) if !w.windowOutputSet.subsetOf(p.references) =>
+     CustomLogger.logMatchTime("DARSHANA Match 16 ColumnPruning", true) {
       p.copy(child = w.copy(
-        windowExpressions = w.windowExpressions.filter(p.references.contains)))
+        windowExpressions = w.windowExpressions.filter(p.references.contains)))}
 
     // Can't prune the columns on LeafNode
-    case p @ Project(_, _: LeafNode) => p
+    case p @ Project(_, _: LeafNode) =>
+      CustomLogger.logMatchTime("DARSHANA Match 17 ColumnPruning", false) {p}
 
-    case NestedColumnAliasing(p) => p
+    case NestedColumnAliasing(p) =>
+      CustomLogger.logMatchTime("DARSHANA Match 18 ColumnPruning", false) {p}
 
     // for all other logical plans that inherits the output from it's children
     // Project over project is handled by the first case, skip it here.
     case p @ Project(_, child) if !child.isInstanceOf[Project] =>
+      CustomLogger.logMatchTime("DARSHANA Match 19 ColumnPruning", false) {
       val required = child.references ++ p.references
       if (!child.inputSet.subsetOf(required)) {
         val newChildren = child.children.map(c => prunedChild(c, required))
         p.copy(child = child.withNewChildren(newChildren))
       } else {
         p
-      }
-  })
+      }}
+  })}
 
   /** Applies a projection only when the child is producing unnecessary attributes */
   private def prunedChild(c: LogicalPlan, allReferences: AttributeSet) =
@@ -847,13 +895,16 @@ object ColumnPruning extends Rule[LogicalPlan] {
    * so remove it. Since the Projects have been added top-down, we need to remove in bottom-up
    * order, otherwise lower Projects can be missed.
    */
-  private def removeProjectBeforeFilter(plan: LogicalPlan): LogicalPlan = plan transformUp {
+  private def removeProjectBeforeFilter(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA: TRANSFORM removeProjectBeforeFilter") {
+    plan transformUp {
     case p1 @ Project(_, f @ Filter(_, p2 @ Project(_, child)))
       if p2.outputSet.subsetOf(child.outputSet) &&
         // We only remove attribute-only project.
         p2.projectList.forall(_.isInstanceOf[AttributeReference]) =>
-      p1.copy(child = f.copy(child = child))
-  }
+      CustomLogger.logMatchTime("DARSHANA: Match 1 removeProjectBeforeFilter", true) {
+      p1.copy(child = f.copy(child = child))}
+  }}
 }
 
 /**
@@ -866,32 +917,40 @@ object ColumnPruning extends Rule[LogicalPlan] {
  */
 object CollapseProject extends Rule[LogicalPlan] with AliasHelper {
 
-  def apply(plan: LogicalPlan): LogicalPlan = plan transformUp {
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA: TRANSFORM CollapseProject") {
+    plan transformUp {
     case p1 @ Project(_, p2: Project) =>
-      if (haveCommonNonDeterministicOutput(p1.projectList, p2.projectList)) {
+      CustomLogger.logMatchTime("DARSHANA: Match 1 CollapseProject", false) {
+        if (haveCommonNonDeterministicOutput(p1.projectList, p2.projectList)) {
         p1
       } else {
         p2.copy(projectList = buildCleanedProjectList(p1.projectList, p2.projectList))
-      }
+      }}
     case p @ Project(_, agg: Aggregate) =>
-      if (haveCommonNonDeterministicOutput(p.projectList, agg.aggregateExpressions)) {
+       CustomLogger.logMatchTime("DARSHANA: Match 2 CollapseProject", false) {
+        if (haveCommonNonDeterministicOutput(p.projectList, agg.aggregateExpressions)) {
         p
       } else {
         agg.copy(aggregateExpressions = buildCleanedProjectList(
           p.projectList, agg.aggregateExpressions))
-      }
+      }}
     case Project(l1, g @ GlobalLimit(_, limit @ LocalLimit(_, p2 @ Project(l2, _))))
         if isRenaming(l1, l2) =>
-      val newProjectList = buildCleanedProjectList(l1, l2)
-      g.copy(child = limit.copy(child = p2.copy(projectList = newProjectList)))
+       CustomLogger.logMatchTime("DARSHANA: Match 3 CollapseProject", false) {
+        val newProjectList = buildCleanedProjectList(l1, l2)
+      g.copy(child = limit.copy(child = p2.copy(projectList = newProjectList)))}
     case Project(l1, limit @ LocalLimit(_, p2 @ Project(l2, _))) if isRenaming(l1, l2) =>
-      val newProjectList = buildCleanedProjectList(l1, l2)
-      limit.copy(child = p2.copy(projectList = newProjectList))
+       CustomLogger.logMatchTime("DARSHANA: Match 4 CollapseProject", false) {
+        val newProjectList = buildCleanedProjectList(l1, l2)
+      limit.copy(child = p2.copy(projectList = newProjectList))}
     case Project(l1, r @ Repartition(_, _, p @ Project(l2, _))) if isRenaming(l1, l2) =>
-      r.copy(child = p.copy(projectList = buildCleanedProjectList(l1, p.projectList)))
+       CustomLogger.logMatchTime("DARSHANA: Match 5 CollapseProject", false) {
+        r.copy(child = p.copy(projectList = buildCleanedProjectList(l1, p.projectList)))}
     case Project(l1, s @ Sample(_, _, _, _, p2 @ Project(l2, _))) if isRenaming(l1, l2) =>
-      s.copy(child = p2.copy(projectList = buildCleanedProjectList(l1, p2.projectList)))
-  }
+       CustomLogger.logMatchTime("DARSHANA: Match 6 CollapseProject", false) {
+        s.copy(child = p2.copy(projectList = buildCleanedProjectList(l1, p2.projectList)))}
+  }}
 
   private def haveCommonNonDeterministicOutput(
       upper: Seq[NamedExpression], lower: Seq[NamedExpression]): Boolean = {
@@ -924,21 +983,26 @@ object CollapseProject extends Rule[LogicalPlan] with AliasHelper {
  * Combines adjacent [[RepartitionOperation]] operators
  */
 object CollapseRepartition extends Rule[LogicalPlan] {
-  def apply(plan: LogicalPlan): LogicalPlan = plan transformUp {
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM CollapseRepartition") {
+    plan transformUp {
     // Case 1: When a Repartition has a child of Repartition or RepartitionByExpression,
     // 1) When the top node does not enable the shuffle (i.e., coalesce API), but the child
     //   enables the shuffle. Returns the child node if the last numPartitions is bigger;
     //   otherwise, keep unchanged.
     // 2) In the other cases, returns the top node with the child's child
-    case r @ Repartition(_, _, child: RepartitionOperation) => (r.shuffle, child.shuffle) match {
+    case r @ Repartition(_, _, child: RepartitionOperation) =>
+      CustomLogger.logMatchTime("DARSHANA Match CollapseRepartition", true) {
+      (r.shuffle, child.shuffle) match {
       case (false, true) => if (r.numPartitions >= child.numPartitions) child else r
       case _ => r.copy(child = child.child)
-    }
+    }}
     // Case 2: When a RepartitionByExpression has a child of Repartition or RepartitionByExpression
     // we can remove the child.
     case r @ RepartitionByExpression(_, child: RepartitionOperation, _) =>
-      r.copy(child = child.child)
-  }
+      CustomLogger.logMatchTime("DARSHANA Match CollapseRepartition", true) {
+      r.copy(child = child.child)}
+  }}
 }
 
 /**
@@ -946,27 +1010,33 @@ object CollapseRepartition extends Rule[LogicalPlan] {
  * and user not specify.
  */
 object OptimizeRepartition extends Rule[LogicalPlan] {
-  override def apply(plan: LogicalPlan): LogicalPlan = plan.transform {
+  override def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM OptimizeRepartition") {
+    plan.transform {
     case r @ RepartitionByExpression(partitionExpressions, _, numPartitions)
       if partitionExpressions.nonEmpty && partitionExpressions.forall(_.foldable) &&
         numPartitions.isEmpty =>
-      r.copy(optNumPartitions = Some(1))
-  }
+      CustomLogger.logMatchTime("DARSHANA Match OptimizeRepartition", true) {
+        r.copy(optNumPartitions = Some(1))}
+  }}
 }
 
 /**
  * Replaces first(col) to nth_value(col, 1) for better performance.
  */
 object OptimizeWindowFunctions extends Rule[LogicalPlan] {
-  def apply(plan: LogicalPlan): LogicalPlan = plan resolveExpressions {
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM OptimizeWindowFunctions") {
+    plan resolveExpressions {
     case we @ WindowExpression(AggregateExpression(first: First, _, _, _, _),
         WindowSpecDefinition(_, orderSpec, frameSpecification: SpecifiedWindowFrame))
         if orderSpec.nonEmpty && frameSpecification.frameType == RowFrame &&
           frameSpecification.lower == UnboundedPreceding &&
           (frameSpecification.upper == UnboundedFollowing ||
             frameSpecification.upper == CurrentRow) =>
-      we.copy(windowFunction = NthValue(first.child, Literal(1), first.ignoreNulls))
-  }
+      CustomLogger.logMatchTime("DARSHANA Match CollapseWindow", true) {
+      we.copy(windowFunction = NthValue(first.child, Literal(1), first.ignoreNulls))}
+  }}
 }
 
 /**
@@ -975,15 +1045,18 @@ object OptimizeWindowFunctions extends Rule[LogicalPlan] {
  *   independent and are of the same window function type, collapse into the parent.
  */
 object CollapseWindow extends Rule[LogicalPlan] {
-  def apply(plan: LogicalPlan): LogicalPlan = plan transformUp {
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM CollapseWindow") {
+    plan transformUp {
     case w1 @ Window(we1, ps1, os1, w2 @ Window(we2, ps2, os2, grandChild))
         if ps1 == ps2 && os1 == os2 && w1.references.intersect(w2.windowOutputSet).isEmpty &&
           we1.nonEmpty && we2.nonEmpty &&
           // This assumes Window contains the same type of window expressions. This is ensured
           // by ExtractWindowFunctions.
           WindowFunctionType.functionType(we1.head) == WindowFunctionType.functionType(we2.head) =>
-      w1.copy(windowExpressions = we2 ++ we1, child = grandChild)
-  }
+      CustomLogger.logMatchTime("DARSHANA Match CollapseWindow", true) {
+      w1.copy(windowExpressions = we2 ++ we1, child = grandChild)}
+  }}
 }
 
 /**
@@ -998,14 +1071,17 @@ object TransposeWindow extends Rule[LogicalPlan] {
     })
   }
 
-  def apply(plan: LogicalPlan): LogicalPlan = plan transformUp {
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM TransposeWindow") {
+    plan transformUp {
     case w1 @ Window(we1, ps1, os1, w2 @ Window(we2, ps2, os2, grandChild))
         if w1.references.intersect(w2.windowOutputSet).isEmpty &&
            w1.expressions.forall(_.deterministic) &&
            w2.expressions.forall(_.deterministic) &&
            compatiblePartitions(ps1, ps2) =>
-      Project(w1.output, Window(we2, ps2, os2, Window(we1, ps1, os1, grandChild)))
-  }
+      CustomLogger.logMatchTime("DARSHANA Match TransposeWindow", true) {
+      Project(w1.output, Window(we2, ps2, os2, Window(we1, ps1, os1, grandChild)))}
+  }}
 }
 
 /**
@@ -1013,15 +1089,20 @@ object TransposeWindow extends Rule[LogicalPlan] {
  * by this [[Generate]] can be removed earlier - before joins and in data sources.
  */
 object InferFiltersFromGenerate extends Rule[LogicalPlan] {
-  def apply(plan: LogicalPlan): LogicalPlan = plan transformUp {
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM InferFiltersFromGenerate") {
+    plan transformUp {
     // This rule does not infer filters from foldable expressions to avoid constant filters
     // like 'size([1, 2, 3]) > 0'. These do not show up in child's constraints and
     // then the idempotence will break.
     case generate @ Generate(e, _, _, _, _, _)
-      if !e.deterministic || e.children.forall(_.foldable) => generate
+      if !e.deterministic || e.children.forall(_.foldable) =>
+      CustomLogger.logMatchTime("DARSHANA Match InferFiltersFromGenerate", true) {
+      generate}
 
     case generate @ Generate(g, _, false, _, _, _) if canInferFilters(g) =>
       // Exclude child's constraints to guarantee idempotency
+      CustomLogger.logMatchTime("DARSHANA Match InferFiltersFromGenerate", true) {
       val inferredFilters = ExpressionSet(
         Seq(
           GreaterThan(Size(g.children.head), Literal(0)),
@@ -1033,8 +1114,8 @@ object InferFiltersFromGenerate extends Rule[LogicalPlan] {
         generate.copy(child = Filter(inferredFilters.reduce(And), generate.child))
       } else {
         generate
-      }
-  }
+      }}
+  }}
 
   private def canInferFilters(g: Generator): Boolean = g match {
     case _: ExplodeBase => true
@@ -1063,17 +1144,21 @@ object InferFiltersFromConstraints extends Rule[LogicalPlan]
     }
   }
 
-  private def inferFilters(plan: LogicalPlan): LogicalPlan = plan transform {
+  private def inferFilters(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM InferFiltersFromConstraints") {
+    plan transform {
     case filter @ Filter(condition, child) =>
+      CustomLogger.logMatchTime("DARSHANA Match 1 InferFiltersFromConstraints", false) {
       val newFilters = filter.constraints --
         (child.constraints ++ splitConjunctivePredicates(condition))
       if (newFilters.nonEmpty) {
         Filter(And(newFilters.reduce(And), condition), child)
       } else {
         filter
-      }
+      }}
 
     case join @ Join(left, right, joinType, conditionOpt, _) =>
+      CustomLogger.logMatchTime("DARSHANA Match 2 InferFiltersFromConstraints", false) {
       joinType match {
         // For inner join, we can infer additional filters for both sides. LeftSemi is kind of an
         // inner join, it just drops the right side in the final output.
@@ -1096,8 +1181,8 @@ object InferFiltersFromConstraints extends Rule[LogicalPlan]
           join.copy(right = newRight)
 
         case _ => join
-      }
-  }
+      }}
+  }}
 
   private def getAllConstraints(
       left: LogicalPlan,
@@ -1126,13 +1211,20 @@ object InferFiltersFromConstraints extends Rule[LogicalPlan]
  * Combines all adjacent [[Union]] operators into a single [[Union]].
  */
 object CombineUnions extends Rule[LogicalPlan] {
-  def apply(plan: LogicalPlan): LogicalPlan = plan transformDown {
-    case u: Union => flattenUnion(u, false)
-    case Distinct(u: Union) => Distinct(flattenUnion(u, true))
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA: TRANSFORM CombineUnions") {
+      plan transformDown {
+    case u: Union =>
+       CustomLogger.logMatchTime("DARSHANA: Match 1  CombineUnions", true) {
+        flattenUnion(u, false)}
+    case Distinct(u: Union) =>
+      CustomLogger.logMatchTime("DARSHANA: Match 2  CombineUnions", true) {
+        Distinct(flattenUnion(u, true))}
     // Only handle distinct-like 'Deduplicate', where the keys == output
     case Deduplicate(keys: Seq[Attribute], u: Union) if AttributeSet(keys) == u.outputSet =>
-      Deduplicate(keys, flattenUnion(u, true))
-  }
+      CustomLogger.logMatchTime("DARSHANA: Match 3  CombineUnions", true) {
+        Deduplicate(keys, flattenUnion(u, true))}
+  }}
 
   private def flattenUnion(union: Union, flattenDistinct: Boolean): Union = {
     val topByName = union.byName
@@ -1170,19 +1262,22 @@ object CombineUnions extends Rule[LogicalPlan] {
  * one conjunctive predicate.
  */
 object CombineFilters extends Rule[LogicalPlan] with PredicateHelper {
-  def apply(plan: LogicalPlan): LogicalPlan = plan transform applyLocally
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM CombineFilters") {
+    plan transform applyLocally}
 
   val applyLocally: PartialFunction[LogicalPlan, LogicalPlan] = {
     // The query execution/optimization does not guarantee the expressions are evaluated in order.
     // We only can combine them if and only if both are deterministic.
     case Filter(fc, nf @ Filter(nc, grandChild)) if fc.deterministic && nc.deterministic =>
+      CustomLogger.logMatchTime("DARSHANA Match 1 CombineFilters", true) {
       (ExpressionSet(splitConjunctivePredicates(fc)) --
         ExpressionSet(splitConjunctivePredicates(nc))).reduceOption(And) match {
         case Some(ac) =>
           Filter(And(nc, ac), grandChild)
         case None =>
           nf
-      }
+      }}
   }
 }
 
@@ -1202,23 +1297,31 @@ object CombineFilters extends Rule[LogicalPlan] with PredicateHelper {
  *    function is order irrelevant
  */
 object EliminateSorts extends Rule[LogicalPlan] {
-  def apply(plan: LogicalPlan): LogicalPlan = plan transform applyLocally
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM EliminateSorts") {
+    plan transform applyLocally}
 
   private val applyLocally: PartialFunction[LogicalPlan, LogicalPlan] = {
     case s @ Sort(orders, _, child) if orders.isEmpty || orders.exists(_.child.foldable) =>
+      CustomLogger.logMatchTime("DARSHANA Match EliminateSorts", true) {
       val newOrders = orders.filterNot(_.child.foldable)
       if (newOrders.isEmpty) {
         applyLocally.lift(child).getOrElse(child)
       } else {
         s.copy(order = newOrders)
-      }
+      }}
     case Sort(orders, false, child) if SortOrder.orderingSatisfies(child.outputOrdering, orders) =>
-      applyLocally.lift(child).getOrElse(child)
-    case s @ Sort(_, _, child) => s.copy(child = recursiveRemoveSort(child))
+      CustomLogger.logMatchTime("DARSHANA Match EliminateSorts", true) {
+      applyLocally.lift(child).getOrElse(child)}
+    case s @ Sort(_, _, child) =>
+      CustomLogger.logMatchTime("DARSHANA Match EliminateSorts", true) {
+      s.copy(child = recursiveRemoveSort(child))}
     case j @ Join(originLeft, originRight, _, cond, _) if cond.forall(_.deterministic) =>
-      j.copy(left = recursiveRemoveSort(originLeft), right = recursiveRemoveSort(originRight))
+      CustomLogger.logMatchTime("DARSHANA Match EliminateSorts", true) {
+      j.copy(left = recursiveRemoveSort(originLeft), right = recursiveRemoveSort(originRight))}
     case g @ Aggregate(_, aggs, originChild) if isOrderIrrelevantAggs(aggs) =>
-      g.copy(child = recursiveRemoveSort(originChild))
+      CustomLogger.logMatchTime("DARSHANA Match EliminateSorts", true) {
+      g.copy(child = recursiveRemoveSort(originChild))}
   }
 
   private def recursiveRemoveSort(plan: LogicalPlan): LogicalPlan = plan match {
@@ -1264,18 +1367,25 @@ object EliminateSorts extends Rule[LogicalPlan] {
  * 3) by eliminating the always-true conditions given the constraints on the child's output.
  */
 object PruneFilters extends Rule[LogicalPlan] with PredicateHelper {
-  def apply(plan: LogicalPlan): LogicalPlan = plan transform {
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM PruneFilters") {
+    plan transform {
     // If the filter condition always evaluate to true, remove the filter.
-    case Filter(Literal(true, BooleanType), child) => child
+    case Filter(Literal(true, BooleanType), child) =>
+      CustomLogger.logMatchTime("DARSHANA Match PruneFilters", true) {
+      child}
     // If the filter condition always evaluate to null or false,
     // replace the input with an empty relation.
     case Filter(Literal(null, _), child) =>
-      LocalRelation(child.output, data = Seq.empty, isStreaming = plan.isStreaming)
+     CustomLogger.logMatchTime("DARSHANA Match PruneFilters", true) {
+      LocalRelation(child.output, data = Seq.empty, isStreaming = plan.isStreaming)}
     case Filter(Literal(false, BooleanType), child) =>
-      LocalRelation(child.output, data = Seq.empty, isStreaming = plan.isStreaming)
+      CustomLogger.logMatchTime("DARSHANA Match PruneFilters", true) {
+      LocalRelation(child.output, data = Seq.empty, isStreaming = plan.isStreaming)}
     // If any deterministic condition is guaranteed to be true given the constraints on the child's
     // output, remove the condition
     case f @ Filter(fc, p: LogicalPlan) =>
+      CustomLogger.logMatchTime("DARSHANA Match PruneFilters", true) {
       val (prunedPredicates, remainingPredicates) =
         splitConjunctivePredicates(fc).partition { cond =>
           cond.deterministic && p.constraints.contains(cond)
@@ -1287,8 +1397,8 @@ object PruneFilters extends Rule[LogicalPlan] with PredicateHelper {
       } else {
         val newCond = remainingPredicates.reduce(And)
         Filter(newCond, p)
-      }
-  }
+      }}
+  }}
 }
 
 /**
@@ -1297,11 +1407,13 @@ object PruneFilters extends Rule[LogicalPlan] with PredicateHelper {
  *  Filter-Join-Join-Join. Most predicates can be pushed down in a single pass.
  */
 object PushDownPredicates extends Rule[LogicalPlan] with PredicateHelper {
-  def apply(plan: LogicalPlan): LogicalPlan = plan transform {
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM PushDownPredicates") {
+    plan transform {
     CombineFilters.applyLocally
       .orElse(PushPredicateThroughNonJoin.applyLocally)
       .orElse(PushPredicateThroughJoin.applyLocally)
-  }
+  }}
 }
 
 /**
@@ -1312,7 +1424,9 @@ object PushDownPredicates extends Rule[LogicalPlan] with PredicateHelper {
  * This heuristic is valid assuming the expression evaluation cost is minimal.
  */
 object PushPredicateThroughNonJoin extends Rule[LogicalPlan] with PredicateHelper {
-  def apply(plan: LogicalPlan): LogicalPlan = plan transform applyLocally
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM PushPredicateThroughNonJoin") {
+    plan transform applyLocally}
 
   val applyLocally: PartialFunction[LogicalPlan, LogicalPlan] = {
     // SPARK-13473: We can't push the predicate down when the underlying projection output non-
@@ -1323,12 +1437,14 @@ object PushPredicateThroughNonJoin extends Rule[LogicalPlan] with PredicateHelpe
     // This also applies to Aggregate.
     case Filter(condition, project @ Project(fields, grandChild))
       if fields.forall(_.deterministic) && canPushThroughCondition(grandChild, condition) =>
+      CustomLogger.logMatchTime("DARSHANA Match 0 PushPredicateThroughNonJoin", true) {
       val aliasMap = getAliasMap(project)
-      project.copy(child = Filter(replaceAlias(condition, aliasMap), grandChild))
+      project.copy(child = Filter(replaceAlias(condition, aliasMap), grandChild))}
 
     case filter @ Filter(condition, aggregate: Aggregate)
       if aggregate.aggregateExpressions.forall(_.deterministic)
         && aggregate.groupingExpressions.nonEmpty =>
+      CustomLogger.logMatchTime("DARSHANA Match 1 PushPredicateThroughNonJoin", false) {
       val aliasMap = getAliasMap(aggregate)
 
       // For each filter, expand the alias and check if the filter can be evaluated using
@@ -1352,7 +1468,7 @@ object PushPredicateThroughNonJoin extends Rule[LogicalPlan] with PredicateHelpe
         if (stayUp.isEmpty) newAggregate else Filter(stayUp.reduce(And), newAggregate)
       } else {
         filter
-      }
+      }}
 
     // Push [[Filter]] operators through [[Window]] operators. Parts of the predicate that can be
     // pushed beneath must satisfy the following conditions:
@@ -1361,6 +1477,7 @@ object PushPredicateThroughNonJoin extends Rule[LogicalPlan] with PredicateHelpe
     // 3. Placed before any non-deterministic predicates.
     case filter @ Filter(condition, w: Window)
       if w.partitionSpec.forall(_.isInstanceOf[AttributeReference]) =>
+      CustomLogger.logMatchTime("DARSHANA Match 2 PushPredicateThroughNonJoin", false) {
       val partitionAttrs = AttributeSet(w.partitionSpec.flatMap(_.references))
 
       val (candidates, nonDeterministic) =
@@ -1378,10 +1495,11 @@ object PushPredicateThroughNonJoin extends Rule[LogicalPlan] with PredicateHelpe
         if (stayUp.isEmpty) newWindow else Filter(stayUp.reduce(And), newWindow)
       } else {
         filter
-      }
+      }}
 
     case filter @ Filter(condition, union: Union) =>
       // Union could change the rows, so non-deterministic predicate can't be pushed down
+      CustomLogger.logMatchTime("DARSHANA Match 3 PushPredicateThroughNonJoin", false) {
       val (pushDown, stayUp) = splitConjunctivePredicates(condition).partition(_.deterministic)
 
       if (pushDown.nonEmpty) {
@@ -1403,9 +1521,10 @@ object PushPredicateThroughNonJoin extends Rule[LogicalPlan] with PredicateHelpe
         }
       } else {
         filter
-      }
+      }}
 
     case filter @ Filter(condition, watermark: EventTimeWatermark) =>
+      CustomLogger.logMatchTime("DARSHANA Match 4 PushPredicateThroughNonJoin", false) {
       val (pushDown, stayUp) = splitConjunctivePredicates(condition).partition { p =>
         p.deterministic && !p.references.contains(watermark.eventTime)
       }
@@ -1418,13 +1537,14 @@ object PushPredicateThroughNonJoin extends Rule[LogicalPlan] with PredicateHelpe
         if (stayUp.isEmpty) newWatermark else Filter(stayUp.reduceLeft(And), newWatermark)
       } else {
         filter
-      }
+      }}
 
     case filter @ Filter(_, u: UnaryNode)
         if canPushThrough(u) && u.expressions.forall(_.deterministic) =>
+      CustomLogger.logMatchTime("DARSHANA Match 5 PushPredicateThroughNonJoin", true) {
       pushDownPredicate(filter, u.child) { predicate =>
         u.withNewChildren(Seq(Filter(predicate, u.child)))
-      }
+      }}
   }
 
   def canPushThrough(p: UnaryNode): Boolean = p match {
@@ -1521,12 +1641,15 @@ object PushPredicateThroughJoin extends Rule[LogicalPlan] with PredicateHelper {
     case _ => false
   }
 
-  def apply(plan: LogicalPlan): LogicalPlan = plan transform applyLocally
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM PushPredicateThroughJoin") {
+      plan transform applyLocally}
 
   val applyLocally: PartialFunction[LogicalPlan, LogicalPlan] = {
     // push the where condition down into join filter
     case f @ Filter(filterCondition, Join(left, right, joinType, joinCondition, hint))
         if canPushThrough(joinType) =>
+      CustomLogger.logMatchTime("DARSHANA Match 1 PushPredicateThroughJoin", false) {
       val (leftFilterConditions, rightFilterConditions, commonFilterCondition) =
         split(splitConjunctivePredicates(filterCondition), left, right)
       joinType match {
@@ -1569,10 +1692,11 @@ object PushPredicateThroughJoin extends Rule[LogicalPlan] with PredicateHelper {
 
         case other =>
           throw new IllegalStateException(s"Unexpected join type: $other")
-      }
+      }}
 
     // push down the join filter into sub query scanning if applicable
     case j @ Join(left, right, joinType, joinCondition, hint) if canPushThrough(joinType) =>
+      CustomLogger.logMatchTime("DARSHANA Match 2 PushPredicateThroughJoin", false) {
       val (leftJoinConditions, rightJoinConditions, commonJoinCondition) =
         split(joinCondition.map(splitConjunctivePredicates).getOrElse(Nil), left, right)
 
@@ -1605,7 +1729,7 @@ object PushPredicateThroughJoin extends Rule[LogicalPlan] with PredicateHelper {
 
         case other =>
           throw new IllegalStateException(s"Unexpected join type: $other")
-      }
+      }}
   }
 }
 
@@ -1620,19 +1744,26 @@ object EliminateLimits extends Rule[LogicalPlan] {
     limitExpr.foldable && child.maxRows.exists { _ <= limitExpr.eval().asInstanceOf[Int] }
   }
 
-  def apply(plan: LogicalPlan): LogicalPlan = plan transformDown {
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM EliminateLimits") {
+    plan transformDown {
     case Limit(l, child) if canEliminate(l, child) =>
-      child
+      CustomLogger.logMatchTime("DARSHANA Match EliminateLimits", true) {
+      child}
     case GlobalLimit(l, child) if canEliminate(l, child) =>
-      child
+      CustomLogger.logMatchTime("DARSHANA Match EliminateLimits", true) {
+      child}
 
     case GlobalLimit(le, GlobalLimit(ne, grandChild)) =>
-      GlobalLimit(Least(Seq(ne, le)), grandChild)
+      CustomLogger.logMatchTime("DARSHANA Match EliminateLimits", true) {
+      GlobalLimit(Least(Seq(ne, le)), grandChild)}
     case LocalLimit(le, LocalLimit(ne, grandChild)) =>
-      LocalLimit(Least(Seq(ne, le)), grandChild)
+      CustomLogger.logMatchTime("DARSHANA Match EliminateLimits", true) {
+      LocalLimit(Least(Seq(ne, le)), grandChild)}
     case Limit(le, Limit(ne, grandChild)) =>
-      Limit(Least(Seq(ne, le)), grandChild)
-  }
+      CustomLogger.logMatchTime("DARSHANA Match EliminateLimits", true) {
+      Limit(Least(Seq(ne, le)), grandChild)}
+  }}
 }
 
 /**
@@ -1665,11 +1796,13 @@ object CheckCartesianProducts extends Rule[LogicalPlan] with PredicateHelper {
   }
 
   def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM CheckCartesianProducts") {
     if (conf.crossJoinEnabled) {
       plan
     } else plan transform {
       case j @ Join(left, right, Inner | LeftOuter | RightOuter | FullOuter, _, _)
         if isCartesianProduct(j) =>
+        CustomLogger.logMatchTime("DARSHANA Match EliminateUnions", true) {
           throw new AnalysisException(
             s"""Detected implicit cartesian product for ${j.joinType.sql} join between logical plans
                |${left.treeString(false).trim}
@@ -1679,8 +1812,8 @@ object CheckCartesianProducts extends Rule[LogicalPlan] with PredicateHelper {
                |Either: use the CROSS JOIN syntax to allow cartesian products between these
                |relations, or: enable implicit cartesian products by setting the configuration
                |variable spark.sql.crossJoin.enabled=true"""
-            .stripMargin)
-    }
+            .stripMargin)}
+    }}
 }
 
 /**
@@ -1695,8 +1828,12 @@ object DecimalAggregates extends Rule[LogicalPlan] {
   /** Maximum number of decimal digits representable precisely in a Double */
   private val MAX_DOUBLE_DIGITS = 15
 
-  def apply(plan: LogicalPlan): LogicalPlan = plan transform {
-    case q: LogicalPlan => q transformExpressionsDown {
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM DecimalAggregates") {
+    plan transform {
+    case q: LogicalPlan =>
+      CustomLogger.logMatchTime("DARSHANA Match DecimalAggregates", true) {
+      q transformExpressionsDown {
       case we @ WindowExpression(ae @ AggregateExpression(af, _, _, _, _), _) => af match {
         case Sum(e @ DecimalType.Expression(prec, scale)) if prec + 10 <= MAX_LONG_DIGITS =>
           MakeDecimal(we.copy(windowFunction = ae.copy(aggregateFunction = Sum(UnscaledValue(e)))),
@@ -1723,8 +1860,8 @@ object DecimalAggregates extends Rule[LogicalPlan] {
 
         case _ => ae
       }
-    }
-  }
+    }}
+  }}
 }
 
 /**
@@ -1732,22 +1869,27 @@ object DecimalAggregates extends Rule[LogicalPlan] {
  * another `LocalRelation`.
  */
 object ConvertToLocalRelation extends Rule[LogicalPlan] {
-  def apply(plan: LogicalPlan): LogicalPlan = plan transform {
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM ConvertToLocalRelation") {
+    plan transform {
     case Project(projectList, LocalRelation(output, data, isStreaming))
         if !projectList.exists(hasUnevaluableExpr) =>
+        CustomLogger.logMatchTime("DARSHANA Match ConvertToLocalRelation", true) {
       val projection = new InterpretedMutableProjection(projectList, output)
       projection.initialize(0)
-      LocalRelation(projectList.map(_.toAttribute), data.map(projection(_).copy()), isStreaming)
+      LocalRelation(projectList.map(_.toAttribute), data.map(projection(_).copy()), isStreaming)}
 
     case Limit(IntegerLiteral(limit), LocalRelation(output, data, isStreaming)) =>
-      LocalRelation(output, data.take(limit), isStreaming)
+       CustomLogger.logMatchTime("DARSHANA Match ConvertToLocalRelation", true) {
+      LocalRelation(output, data.take(limit), isStreaming)}
 
     case Filter(condition, LocalRelation(output, data, isStreaming))
         if !hasUnevaluableExpr(condition) =>
+        CustomLogger.logMatchTime("DARSHANA Match ConvertToLocalRelation", true) {
       val predicate = Predicate.create(condition, output)
       predicate.initialize(0)
-      LocalRelation(output, data.filter(row => predicate.eval(row)), isStreaming)
-  }
+      LocalRelation(output, data.filter(row => predicate.eval(row)), isStreaming)}
+  }}
 
   private def hasUnevaluableExpr(expr: Expression): Boolean = {
     expr.find(e => e.isInstanceOf[Unevaluable] && !e.isInstanceOf[AttributeReference]).isDefined
@@ -1761,17 +1903,24 @@ object ConvertToLocalRelation extends Rule[LogicalPlan] {
  * }}}
  */
 object ReplaceDistinctWithAggregate extends Rule[LogicalPlan] {
-  def apply(plan: LogicalPlan): LogicalPlan = plan transform {
-    case Distinct(child) => Aggregate(child.output, child.output, child)
-  }
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM ReplaceDistinctWithAggregate") {
+    plan transform {
+    case Distinct(child) =>
+      CustomLogger.logMatchTime("DARSHANA Match ReplaceDistinctWithAggregate", true) {
+      Aggregate(child.output, child.output, child)}
+  }}
 }
 
 /**
  * Replaces logical [[Deduplicate]] operator with an [[Aggregate]] operator.
  */
 object ReplaceDeduplicateWithAggregate extends Rule[LogicalPlan] {
-  def apply(plan: LogicalPlan): LogicalPlan = plan transformUpWithNewOutput {
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM ReplaceDeduplicateWithAggregate") {
+    plan transformUpWithNewOutput {
     case d @ Deduplicate(keys, child) if !child.isStreaming =>
+      CustomLogger.logMatchTime("DARSHANA Match ReplaceDeduplicateWithAggregate", true) {
       val keyExprIds = keys.map(_.exprId)
       val aggCols = child.output.map { attr =>
         if (keyExprIds.contains(attr.exprId)) {
@@ -1788,8 +1937,8 @@ object ReplaceDeduplicateWithAggregate extends Rule[LogicalPlan] {
       val nonemptyKeys = if (keys.isEmpty) Literal(1) :: Nil else keys
       val newAgg = Aggregate(nonemptyKeys, aggCols, child)
       val attrMapping = d.output.zip(newAgg.output)
-      newAgg -> attrMapping
-  }
+      newAgg -> attrMapping}
+  }}
 }
 
 /**
@@ -1805,12 +1954,15 @@ object ReplaceDeduplicateWithAggregate extends Rule[LogicalPlan] {
  *    join conditions will be incorrect.
  */
 object ReplaceIntersectWithSemiJoin extends Rule[LogicalPlan] {
-  def apply(plan: LogicalPlan): LogicalPlan = plan transform {
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM ReplaceIntersectWithSemiJoin") {
+    plan transform {
     case Intersect(left, right, false) =>
+      CustomLogger.logMatchTime("DARSHANA Match ReplaceIntersectWithSemiJoin", true) {
       assert(left.output.size == right.output.size)
       val joinCond = left.output.zip(right.output).map { case (l, r) => EqualNullSafe(l, r) }
-      Distinct(Join(left, right, LeftSemi, joinCond.reduceLeftOption(And), JoinHint.NONE))
-  }
+      Distinct(Join(left, right, LeftSemi, joinCond.reduceLeftOption(And), JoinHint.NONE))}
+  }}
 }
 
 /**
@@ -1826,12 +1978,15 @@ object ReplaceIntersectWithSemiJoin extends Rule[LogicalPlan] {
  *    join conditions will be incorrect.
  */
 object ReplaceExceptWithAntiJoin extends Rule[LogicalPlan] {
-  def apply(plan: LogicalPlan): LogicalPlan = plan transform {
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM ReplaceExceptWithAntiJoin") {
+    plan transform {
     case Except(left, right, false) =>
+      CustomLogger.logMatchTime("DARSHANA Match ReplaceExceptWithAntiJoin", true) {
       assert(left.output.size == right.output.size)
       val joinCond = left.output.zip(right.output).map { case (l, r) => EqualNullSafe(l, r) }
-      Distinct(Join(left, right, LeftAnti, joinCond.reduceLeftOption(And), JoinHint.NONE))
-  }
+      Distinct(Join(left, right, LeftAnti, joinCond.reduceLeftOption(And), JoinHint.NONE))}
+  }}
 }
 
 /**
@@ -1866,8 +2021,11 @@ object ReplaceExceptWithAntiJoin extends Rule[LogicalPlan] {
  */
 
 object RewriteExceptAll extends Rule[LogicalPlan] {
-  def apply(plan: LogicalPlan): LogicalPlan = plan transform {
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM RewriteExceptAll") {
+    plan transform {
     case Except(left, right, true) =>
+      CustomLogger.logMatchTime("DARSHANA Match RewriteExceptAll", true) {
       assert(left.output.size == right.output.size)
 
       val newColumnLeft = Alias(Literal(1L), "vcol")()
@@ -1888,8 +2046,8 @@ object RewriteExceptAll extends Rule[LogicalPlan] {
         left.output,
         filteredAggPlan
       )
-      Project(left.output, genRowPlan)
-  }
+      Project(left.output, genRowPlan)}
+  }}
 }
 
 /**
@@ -1923,8 +2081,11 @@ object RewriteExceptAll extends Rule[LogicalPlan] {
  * }}}
  */
 object RewriteIntersectAll extends Rule[LogicalPlan] {
-  def apply(plan: LogicalPlan): LogicalPlan = plan transform {
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM RewriteIntersectAll") {
+    plan transform {
     case Intersect(left, right, true) =>
+      CustomLogger.logMatchTime("DARSHANA Match RewriteExceptAll", true) {
       assert(left.output.size == right.output.size)
 
       val trueVcol1 = Alias(Literal(true), "vcol1")()
@@ -1966,8 +2127,8 @@ object RewriteIntersectAll extends Rule[LogicalPlan] {
         left.output,
         projectMinPlan
       )
-      Project(left.output, genRowPlan)
-  }
+      Project(left.output, genRowPlan)}
+  }}
 }
 
 /**
@@ -1975,8 +2136,11 @@ object RewriteIntersectAll extends Rule[LogicalPlan] {
  * but only makes the grouping key bigger.
  */
 object RemoveLiteralFromGroupExpressions extends Rule[LogicalPlan] {
-  def apply(plan: LogicalPlan): LogicalPlan = plan transform {
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM RemoveLiteralFromGroupExpressions") {
+    plan transform {
     case a @ Aggregate(grouping, _, _) if grouping.nonEmpty =>
+      CustomLogger.logMatchTime("DARSHANA Match RemoveLiteralFromGroupExpressions", true) {
       val newGrouping = grouping.filter(!_.foldable)
       if (newGrouping.nonEmpty) {
         a.copy(groupingExpressions = newGrouping)
@@ -1985,8 +2149,8 @@ object RemoveLiteralFromGroupExpressions extends Rule[LogicalPlan] {
         // change the return semantics when the input of the Aggregate is empty (SPARK-17114). We
         // instead replace this by single, easy to hash/sort, literal expression.
         a.copy(groupingExpressions = Seq(Literal(0, IntegerType)))
-      }
-  }
+      }}
+  }}
 }
 
 /**
@@ -1994,15 +2158,18 @@ object RemoveLiteralFromGroupExpressions extends Rule[LogicalPlan] {
  * but only makes the grouping key bigger.
  */
 object RemoveRepetitionFromGroupExpressions extends Rule[LogicalPlan] {
-  def apply(plan: LogicalPlan): LogicalPlan = plan transform {
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM RemoveRepetitionFromGroupExpressions") {
+    plan transform {
     case a @ Aggregate(grouping, _, _) if grouping.size > 1 =>
+      CustomLogger.logMatchTime("DARSHANA Match RemoveRepetitionFromGroupExpressions", true) {
       val newGrouping = ExpressionSet(grouping).toSeq
       if (newGrouping.size == grouping.size) {
         a
       } else {
         a.copy(groupingExpressions = newGrouping)
-      }
-  }
+      }}
+  }}
 }
 
 /**
@@ -2014,7 +2181,9 @@ object OptimizeLimitZero extends Rule[LogicalPlan] {
   private def empty(plan: LogicalPlan) =
     LocalRelation(plan.output, data = Seq.empty, isStreaming = plan.isStreaming)
 
-  def apply(plan: LogicalPlan): LogicalPlan = plan transformUp {
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM OptimizeLimitZero") {
+    plan transformUp {
     // Nodes below GlobalLimit or LocalLimit can be pruned if the limit value is zero (0).
     // Any subtree in the logical plan that has GlobalLimit 0 or LocalLimit 0 as its root is
     // semantically equivalent to an empty relation.
@@ -2026,7 +2195,8 @@ object OptimizeLimitZero extends Rule[LogicalPlan] {
     //
     // Replace Global Limit 0 nodes with empty Local Relation
     case gl @ GlobalLimit(IntegerLiteral(0), _) =>
-      empty(gl)
+      CustomLogger.logMatchTime("DARSHANA Match OptimizeLimitZero", true) {
+      empty(gl)}
 
     // Note: For all SQL queries, if a LocalLimit 0 node exists in the Logical Plan, then a
     // GlobalLimit 0 node would also exist. Thus, the above case would be sufficient to handle
@@ -2035,6 +2205,7 @@ object OptimizeLimitZero extends Rule[LogicalPlan] {
     //
     // Replace Local Limit 0 nodes with empty Local Relation
     case ll @ LocalLimit(IntegerLiteral(0), _) =>
-      empty(ll)
-  }
+      CustomLogger.logMatchTime("DARSHANA Match OptimizeLimitZero", true) {
+      empty(ll)}
+  }}
 }

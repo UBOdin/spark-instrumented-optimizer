@@ -24,6 +24,7 @@ import scala.collection.mutable
 
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.AnalysisException
+import org.apache.spark.sql.catalyst.CustomLogger
 import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.catalyst.expressions.aggregate._
 import org.apache.spark.sql.catalyst.plans.logical._
@@ -197,9 +198,11 @@ abstract class TypeCoercionBase {
   object WidenSetOperationTypes extends TypeCoercionRule {
 
     override protected def coerceTypes(plan: LogicalPlan): LogicalPlan = {
+      CustomLogger.logTransformTime("DARSHANA TRANSFORM WidenSetOperationTypes") {
       plan resolveOperatorsUpWithNewOutput {
         case s @ Except(left, right, isAll) if s.childrenResolved &&
           left.output.length == right.output.length && !s.resolved =>
+          CustomLogger.logMatchTime("DARSHANA Match WidenSetOperationTypes", true) {
           val newChildren: Seq[LogicalPlan] = buildNewChildrenWithWiderTypes(left :: right :: Nil)
           if (newChildren.isEmpty) {
             s -> Nil
@@ -207,10 +210,11 @@ abstract class TypeCoercionBase {
             assert(newChildren.length == 2)
             val attrMapping = left.output.zip(newChildren.head.output)
             Except(newChildren.head, newChildren.last, isAll) -> attrMapping
-          }
+          }}
 
         case s @ Intersect(left, right, isAll) if s.childrenResolved &&
           left.output.length == right.output.length && !s.resolved =>
+          CustomLogger.logMatchTime("DARSHANA Match WidenSetOperationTypes", true) {
           val newChildren: Seq[LogicalPlan] = buildNewChildrenWithWiderTypes(left :: right :: Nil)
           if (newChildren.isEmpty) {
             s -> Nil
@@ -218,18 +222,19 @@ abstract class TypeCoercionBase {
             assert(newChildren.length == 2)
             val attrMapping = left.output.zip(newChildren.head.output)
             Intersect(newChildren.head, newChildren.last, isAll) -> attrMapping
-          }
+          }}
 
         case s: Union if s.childrenResolved && !s.byName &&
           s.children.forall(_.output.length == s.children.head.output.length) && !s.resolved =>
+          CustomLogger.logMatchTime("DARSHANA Match WidenSetOperationTypes", true) {
           val newChildren: Seq[LogicalPlan] = buildNewChildrenWithWiderTypes(s.children)
           if (newChildren.isEmpty) {
             s -> Nil
           } else {
             val attrMapping = s.children.head.output.zip(newChildren.head.output)
             s.copy(children = newChildren) -> attrMapping
-          }
-      }
+          }}
+      }}
     }
 
     /** Build new children with the widest types for each attribute among all the children */
@@ -295,9 +300,12 @@ abstract class TypeCoercionBase {
    */
   object InConversion extends TypeCoercionRule {
     override protected def coerceTypes(
-        plan: LogicalPlan): LogicalPlan = plan resolveExpressions {
+        plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM InConversion") {
+    plan resolveExpressions {
       // Skip nodes who's children have not been resolved yet.
-      case e if !e.childrenResolved => e
+      case e if !e.childrenResolved =>
+        CustomLogger.logMatchTime("DARSHANA Match InConversion", false) {e}
 
       // Handle type casting required between value expression and subquery output
       // in IN subquery.
@@ -305,6 +313,7 @@ abstract class TypeCoercionBase {
           if !i.resolved && lhs.length == sub.output.length =>
         // LHS is the value expressions of IN subquery.
         // RHS is the subquery output.
+        CustomLogger.logMatchTime("DARSHANA Match InConversion", false) {
         val rhs = sub.output
 
         val commonTypes = lhs.zip(rhs).flatMap { case (l, r) =>
@@ -327,14 +336,15 @@ abstract class TypeCoercionBase {
           InSubquery(newLhs, ListQuery(newSub, children, exprId, newSub.output))
         } else {
           i
-        }
+        }}
 
       case i @ In(a, b) if b.exists(_.dataType != a.dataType) =>
+        CustomLogger.logMatchTime("DARSHANA Match InConversion", false) {
         findWiderCommonType(i.children.map(_.dataType)) match {
           case Some(finalDataType) => i.withNewChildren(i.children.map(Cast(_, finalDataType)))
           case None => i
-        }
-    }
+        }}
+    }}
   }
 
   /**
@@ -343,51 +353,60 @@ abstract class TypeCoercionBase {
   object FunctionArgumentConversion extends TypeCoercionRule {
 
     override protected def coerceTypes(
-        plan: LogicalPlan): LogicalPlan = plan resolveExpressions {
+        plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM FunctionArgumentConversion") {
+    plan resolveExpressions {
       // Skip nodes who's children have not been resolved yet.
-      case e if !e.childrenResolved => e
+      case e if !e.childrenResolved =>
+        CustomLogger.logMatchTime("DARSHANA Match FunctionArgumentConversion", false) {e}
 
       case a @ CreateArray(children, _) if !haveSameType(children.map(_.dataType)) =>
+        CustomLogger.logMatchTime("DARSHANA Match FunctionArgumentConversion", false) {
         val types = children.map(_.dataType)
         findWiderCommonType(types) match {
           case Some(finalDataType) => a.copy(children.map(castIfNotSameType(_, finalDataType)))
           case None => a
-        }
+        }}
 
       case c @ Concat(children) if children.forall(c => ArrayType.acceptsType(c.dataType)) &&
         !haveSameType(c.inputTypesForMerging) =>
+        CustomLogger.logMatchTime("DARSHANA Match FunctionArgumentConversion", false) {
         val types = children.map(_.dataType)
         findWiderCommonType(types) match {
           case Some(finalDataType) => Concat(children.map(castIfNotSameType(_, finalDataType)))
           case None => c
-        }
+        }}
 
       case aj @ ArrayJoin(arr, d, nr) if !ArrayType(StringType).acceptsType(arr.dataType) &&
         ArrayType.acceptsType(arr.dataType) =>
+        CustomLogger.logMatchTime("DARSHANA Match FunctionArgumentConversion", false) {
         val containsNull = arr.dataType.asInstanceOf[ArrayType].containsNull
         implicitCast(arr, ArrayType(StringType, containsNull)) match {
           case Some(castedArr) => ArrayJoin(castedArr, d, nr)
           case None => aj
-        }
+        }}
 
       case s @ Sequence(_, _, _, timeZoneId)
           if !haveSameType(s.coercibleChildren.map(_.dataType)) =>
+        CustomLogger.logMatchTime("DARSHANA Match FunctionArgumentConversion", false) {
         val types = s.coercibleChildren.map(_.dataType)
         findWiderCommonType(types) match {
           case Some(widerDataType) => s.castChildrenTo(widerDataType)
           case None => s
-        }
+        }}
 
       case m @ MapConcat(children) if children.forall(c => MapType.acceptsType(c.dataType)) &&
           !haveSameType(m.inputTypesForMerging) =>
+        CustomLogger.logMatchTime("DARSHANA Match FunctionArgumentConversion", false) {
         val types = children.map(_.dataType)
         findWiderCommonType(types) match {
           case Some(finalDataType) => MapConcat(children.map(castIfNotSameType(_, finalDataType)))
           case None => m
-        }
+        }}
 
       case m @ CreateMap(children, _) if m.keys.length == m.values.length &&
           (!haveSameType(m.keys.map(_.dataType)) || !haveSameType(m.values.map(_.dataType))) =>
+        CustomLogger.logMatchTime("DARSHANA Match FunctionArgumentConversion", false) {
         val keyTypes = m.keys.map(_.dataType)
         val newKeys = findWiderCommonType(keyTypes) match {
           case Some(finalDataType) => m.keys.map(castIfNotSameType(_, finalDataType))
@@ -400,47 +419,58 @@ abstract class TypeCoercionBase {
           case None => m.values
         }
 
-        m.copy(newKeys.zip(newValues).flatMap { case (k, v) => Seq(k, v) })
+        m.copy(newKeys.zip(newValues).flatMap { case (k, v) => Seq(k, v) })}
 
       // Hive lets you do aggregation of timestamps... for some reason
-      case Sum(e @ TimestampType()) => Sum(Cast(e, DoubleType))
-      case Average(e @ TimestampType()) => Average(Cast(e, DoubleType))
+      case Sum(e @ TimestampType()) =>
+        CustomLogger.logMatchTime("DARSHANA Match FunctionArgumentConversion", false) {
+          Sum(Cast(e, DoubleType))}
+      case Average(e @ TimestampType()) =>
+        CustomLogger.logMatchTime("DARSHANA Match FunctionArgumentConversion", false) {
+          Average(Cast(e, DoubleType))}
 
       // Coalesce should return the first non-null value, which could be any column
       // from the list. So we need to make sure the return type is deterministic and
       // compatible with every child column.
       case c @ Coalesce(es) if !haveSameType(c.inputTypesForMerging) =>
+        CustomLogger.logMatchTime("DARSHANA Match FunctionArgumentConversion", false) {
         val types = es.map(_.dataType)
         findWiderCommonType(types) match {
           case Some(finalDataType) =>
             Coalesce(es.map(castIfNotSameType(_, finalDataType)))
           case None =>
             c
-        }
+        }}
 
       // When finding wider type for `Greatest` and `Least`, we should handle decimal types even if
       // we need to truncate, but we should not promote one side to string if the other side is
       // string.g
       case g @ Greatest(children) if !haveSameType(g.inputTypesForMerging) =>
+        CustomLogger.logMatchTime("DARSHANA Match FunctionArgumentConversion", false) {
         val types = children.map(_.dataType)
         findWiderTypeWithoutStringPromotion(types) match {
           case Some(finalDataType) => Greatest(children.map(castIfNotSameType(_, finalDataType)))
           case None => g
-        }
+        }}
 
       case l @ Least(children) if !haveSameType(l.inputTypesForMerging) =>
+        CustomLogger.logMatchTime("DARSHANA Match FunctionArgumentConversion", false) {
         val types = children.map(_.dataType)
         findWiderTypeWithoutStringPromotion(types) match {
           case Some(finalDataType) => Least(children.map(castIfNotSameType(_, finalDataType)))
           case None => l
-        }
+        }}
 
       case NaNvl(l, r) if l.dataType == DoubleType && r.dataType == FloatType =>
-        NaNvl(l, Cast(r, DoubleType))
+        CustomLogger.logMatchTime("DARSHANA Match FunctionArgumentConversion", false) {
+        NaNvl(l, Cast(r, DoubleType))}
       case NaNvl(l, r) if l.dataType == FloatType && r.dataType == DoubleType =>
-        NaNvl(Cast(l, DoubleType), r)
-      case NaNvl(l, r) if r.dataType == NullType => NaNvl(l, Cast(r, l.dataType))
-    }
+        CustomLogger.logMatchTime("DARSHANA Match FunctionArgumentConversion", false) {
+        NaNvl(Cast(l, DoubleType), r)}
+      case NaNvl(l, r) if r.dataType == NullType =>
+        CustomLogger.logMatchTime("DARSHANA Match FunctionArgumentConversion", false) {
+          NaNvl(l, Cast(r, l.dataType))}
+    }}
   }
 
   /**
@@ -449,17 +479,23 @@ abstract class TypeCoercionBase {
    */
   object Division extends TypeCoercionRule {
     override protected def coerceTypes(
-        plan: LogicalPlan): LogicalPlan = plan resolveExpressions {
+        plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM Division") {
+    plan resolveExpressions {
       // Skip nodes who has not been resolved yet,
       // as this is an extra rule which should be applied at last.
-      case e if !e.childrenResolved => e
+      case e if !e.childrenResolved =>
+      CustomLogger.logMatchTime("DARSHANA Match Division", false) {e}
 
       // Decimal and Double remain the same
-      case d: Divide if d.dataType == DoubleType => d
-      case d: Divide if d.dataType.isInstanceOf[DecimalType] => d
+      case d: Divide if d.dataType == DoubleType =>
+      CustomLogger.logMatchTime("DARSHANA Match Division", false) {d}
+      case d: Divide if d.dataType.isInstanceOf[DecimalType] =>
+      CustomLogger.logMatchTime("DARSHANA Match Division", false) {d}
       case d @ Divide(left, right, _) if isNumericOrNull(left) && isNumericOrNull(right) =>
-        d.withNewChildren(Seq(Cast(left, DoubleType), Cast(right, DoubleType)))
-    }
+      CustomLogger.logMatchTime("DARSHANA Match Division", false) {
+      d.withNewChildren(Seq(Cast(left, DoubleType), Cast(right, DoubleType)))}
+    }}
 
     private def isNumericOrNull(ex: Expression): Boolean = {
       // We need to handle null types in case a query contains null literals.
@@ -472,11 +508,15 @@ abstract class TypeCoercionBase {
    * This rule cast the integral inputs to long type, to avoid overflow during calculation.
    */
   object IntegralDivision extends TypeCoercionRule {
-    override protected def coerceTypes(plan: LogicalPlan): LogicalPlan = plan resolveExpressions {
-      case e if !e.childrenResolved => e
+    override protected def coerceTypes(plan: LogicalPlan): LogicalPlan =
+      CustomLogger.logTransformTime("DARSHANA TRANSFORM IntegralDivision") {
+      plan resolveExpressions {
+      case e if !e.childrenResolved =>
+      CustomLogger.logMatchTime("DARSHANA Match IntegralDivision", false) {e}
       case d @ IntegralDivide(left, right, _) =>
-        d.withNewChildren(Seq(mayCastToLong(left), mayCastToLong(right)))
-    }
+      CustomLogger.logMatchTime("DARSHANA Match IntegralDivision", false) {
+      d.withNewChildren(Seq(mayCastToLong(left), mayCastToLong(right)))}
+    }}
 
     private def mayCastToLong(expr: Expression): Expression = expr.dataType match {
       case _: ByteType | _: ShortType | _: IntegerType => Cast(expr, LongType)
@@ -489,17 +529,20 @@ abstract class TypeCoercionBase {
    */
   object CaseWhenCoercion extends TypeCoercionRule {
     override protected def coerceTypes(
-        plan: LogicalPlan): LogicalPlan = plan resolveExpressions {
+        plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM CaseWhenCoercion") {
+    plan resolveExpressions {
       case c: CaseWhen if c.childrenResolved && !haveSameType(c.inputTypesForMerging) =>
-        val maybeCommonType = findWiderCommonType(c.inputTypesForMerging)
+        CustomLogger.logMatchTime("DARSHANA Match CaseWhenCoercion", false) {
+          val maybeCommonType = findWiderCommonType(c.inputTypesForMerging)
         maybeCommonType.map { commonType =>
           val newBranches = c.branches.map { case (condition, value) =>
             (condition, castIfNotSameType(value, commonType))
           }
           val newElseValue = c.elseValue.map(castIfNotSameType(_, commonType))
           CaseWhen(newBranches, newElseValue)
-        }.getOrElse(c)
-    }
+        }.getOrElse(c)}
+    }}
   }
 
   /**
@@ -507,36 +550,45 @@ abstract class TypeCoercionBase {
    */
   object IfCoercion extends TypeCoercionRule {
     override protected def coerceTypes(
-        plan: LogicalPlan): LogicalPlan = plan resolveExpressions {
-      case e if !e.childrenResolved => e
+        plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM IfCoercion") {
+    plan resolveExpressions {
+      case e if !e.childrenResolved =>
+      CustomLogger.logMatchTime("DARSHANA Match IfCoercion", false) {e}
       // Find tightest common type for If, if the true value and false value have different types.
       case i @ If(pred, left, right) if !haveSameType(i.inputTypesForMerging) =>
+        CustomLogger.logMatchTime("DARSHANA Match IfCoercion", false) {
         findWiderTypeForTwo(left.dataType, right.dataType).map { widestType =>
           val newLeft = castIfNotSameType(left, widestType)
           val newRight = castIfNotSameType(right, widestType)
           If(pred, newLeft, newRight)
-        }.getOrElse(i)  // If there is no applicable conversion, leave expression unchanged.
+        }.getOrElse(i)}  // If there is no applicable conversion, leave expression unchanged.
       case If(Literal(null, NullType), left, right) =>
-        If(Literal.create(null, BooleanType), left, right)
+        CustomLogger.logMatchTime("DARSHANA Match IfCoercion", false) {
+        If(Literal.create(null, BooleanType), left, right)}
       case If(pred, left, right) if pred.dataType == NullType =>
-        If(Cast(pred, BooleanType), left, right)
-    }
+        CustomLogger.logMatchTime("DARSHANA Match IfCoercion", false) {
+        If(Cast(pred, BooleanType), left, right)}
+    }}
   }
 
   /**
    * Coerces NullTypes in the Stack expression to the column types of the corresponding positions.
    */
   object StackCoercion extends TypeCoercionRule {
-    override def coerceTypes(plan: LogicalPlan): LogicalPlan = plan resolveExpressions {
+    override def coerceTypes(plan: LogicalPlan): LogicalPlan =
+      CustomLogger.logTransformTime("DARSHANA TRANSFORM StackCoercion") {
+      plan resolveExpressions {
       case s @ Stack(children) if s.childrenResolved && s.hasFoldableNumRows =>
+        CustomLogger.logMatchTime("DARSHANA Match StackCoercion", false) {
         Stack(children.zipWithIndex.map {
           // The first child is the number of rows for stack.
           case (e, 0) => e
           case (Literal(null, NullType), index: Int) =>
             Literal.create(null, s.findDataType(index))
           case (e, _) => e
-        })
-    }
+        })}
+    }}
   }
 
   /**
@@ -548,7 +600,9 @@ abstract class TypeCoercionBase {
   object ConcatCoercion extends TypeCoercionRule {
 
     override protected def coerceTypes(plan: LogicalPlan): LogicalPlan = {
+      CustomLogger.logTransformTime("DARSHANA TRANSFORM ConcatCoercion") {
       plan resolveOperators { case p =>
+        CustomLogger.logMatchTime("DARSHANA Match ConcatCoercion", false) {
         p transformExpressionsUp {
           // Skip nodes if unresolved or empty children
           case c @ Concat(children) if !c.childrenResolved || children.isEmpty => c
@@ -558,8 +612,8 @@ abstract class TypeCoercionBase {
               implicitCast(e, StringType).getOrElse(e)
             }
             c.copy(children = newChildren)
-        }
-      }
+        }}
+      }}
     }
   }
 
@@ -568,10 +622,13 @@ abstract class TypeCoercionBase {
    * to a common type.
    */
   object MapZipWithCoercion extends TypeCoercionRule {
-    override protected def coerceTypes(plan: LogicalPlan): LogicalPlan = plan resolveExpressions {
+    override protected def coerceTypes(plan: LogicalPlan): LogicalPlan =
+      CustomLogger.logTransformTime("DARSHANA TRANSFORM MapZipWithCoercion") {
+      plan resolveExpressions {
       // Lambda function isn't resolved when the rule is executed.
       case m @ MapZipWith(left, right, function) if m.arguments.forall(a => a.resolved &&
           MapType.acceptsType(a.dataType)) && !m.leftKeyType.sameType(m.rightKeyType) =>
+        CustomLogger.logMatchTime("DARSHANA Match MapZipWithCoercion", false) {
         findWiderTypeForTwo(m.leftKeyType, m.rightKeyType) match {
           case Some(finalKeyType) if !Cast.forceNullable(m.leftKeyType, finalKeyType) &&
               !Cast.forceNullable(m.rightKeyType, finalKeyType) =>
@@ -583,8 +640,8 @@ abstract class TypeCoercionBase {
               MapType(finalKeyType, m.rightValueType, m.rightValueContainsNull))
             MapZipWith(newLeft, newRight, function)
           case _ => m
-        }
-    }
+        }}
+    }}
   }
 
   /**
@@ -596,7 +653,9 @@ abstract class TypeCoercionBase {
   object EltCoercion extends TypeCoercionRule {
 
     override protected def coerceTypes(plan: LogicalPlan): LogicalPlan = {
+       CustomLogger.logTransformTime("DARSHANA TRANSFORM EltCoercion") {
       plan resolveOperators { case p =>
+        CustomLogger.logMatchTime("DARSHANA Match EltCoercion", false) {
         p transformExpressionsUp {
           // Skip nodes if unresolved or not enough children
           case c @ Elt(children, _) if !c.childrenResolved || children.size < 2 => c
@@ -612,27 +671,42 @@ abstract class TypeCoercionBase {
               children.tail
             }
             c.copy(children = newIndex +: newInputs)
-        }
-      }
+        }}
+      }}
     }
   }
 
   object DateTimeOperations extends Rule[LogicalPlan] {
-    override def apply(plan: LogicalPlan): LogicalPlan = plan resolveExpressions {
+    override def apply(plan: LogicalPlan): LogicalPlan =
+      CustomLogger.logTransformTime("DARSHANA TRANSFORM DateTimeOperations") {
+      plan resolveExpressions {
       // Skip nodes who's children have not been resolved yet.
-      case e if !e.childrenResolved => e
-      case d @ DateAdd(TimestampType(), _) => d.copy(startDate = Cast(d.startDate, DateType))
-      case d @ DateAdd(StringType(), _) => d.copy(startDate = Cast(d.startDate, DateType))
-      case d @ DateSub(TimestampType(), _) => d.copy(startDate = Cast(d.startDate, DateType))
-      case d @ DateSub(StringType(), _) => d.copy(startDate = Cast(d.startDate, DateType))
+      case e if !e.childrenResolved =>
+        CustomLogger.logMatchTime("DARSHANA Match DateTimeOperations", false) {e}
+      case d @ DateAdd(TimestampType(), _) =>
+        CustomLogger.logMatchTime("DARSHANA Match DateTimeOperations", false) {
+          d.copy(startDate = Cast(d.startDate, DateType))}
+      case d @ DateAdd(StringType(), _) =>
+        CustomLogger.logMatchTime("DARSHANA Match DateTimeOperations", false) {
+          d.copy(startDate = Cast(d.startDate, DateType))}
+      case d @ DateSub(TimestampType(), _) =>
+        CustomLogger.logMatchTime("DARSHANA Match DateTimeOperations", false) {
+          d.copy(startDate = Cast(d.startDate, DateType))}
+      case d @ DateSub(StringType(), _) =>
+        CustomLogger.logMatchTime("DARSHANA Match DateTimeOperations", false) {
+          d.copy(startDate = Cast(d.startDate, DateType))}
 
       case s @ SubtractTimestamps(DateType(), _) =>
-        s.copy(endTimestamp = Cast(s.endTimestamp, TimestampType))
+        CustomLogger.logMatchTime("DARSHANA Match DateTimeOperations", false) {
+        s.copy(endTimestamp = Cast(s.endTimestamp, TimestampType))}
       case s @ SubtractTimestamps(_, DateType()) =>
-        s.copy(startTimestamp = Cast(s.startTimestamp, TimestampType))
+        CustomLogger.logMatchTime("DARSHANA Match DateTimeOperations", false) {
+        s.copy(startTimestamp = Cast(s.startTimestamp, TimestampType))}
 
-      case t @ TimeAdd(StringType(), _, _) => t.copy(start = Cast(t.start, TimestampType))
-    }
+      case t @ TimeAdd(StringType(), _, _) =>
+        CustomLogger.logMatchTime("DARSHANA Match DateTimeOperations", false) {
+          t.copy(start = Cast(t.start, TimestampType))}
+    }}
   }
 
   /**
@@ -653,12 +727,16 @@ abstract class TypeCoercionBase {
     }
 
     override protected def coerceTypes(
-        plan: LogicalPlan): LogicalPlan = plan resolveExpressions {
+        plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM ImplicitTypeCasts") {
+    plan resolveExpressions {
       // Skip nodes who's children have not been resolved yet.
-      case e if !e.childrenResolved => e
+      case e if !e.childrenResolved =>
+        CustomLogger.logMatchTime("DARSHANA Match ImplicitTypeCasts", false) {e}
 
       case b @ BinaryOperator(left, right)
           if canHandleTypeCoercion(left.dataType, right.dataType) =>
+        CustomLogger.logMatchTime("DARSHANA Match ImplicitTypeCasts", false) {
         findTightestCommonType(left.dataType, right.dataType).map { commonType =>
           if (b.inputType.acceptsType(commonType)) {
             // If the expression accepts the tightest common type, cast to that.
@@ -669,18 +747,20 @@ abstract class TypeCoercionBase {
             // Otherwise, don't do anything with the expression.
             b
           }
-        }.getOrElse(b)  // If there is no applicable conversion, leave expression unchanged.
+        }.getOrElse(b)}  // If there is no applicable conversion, leave expression unchanged.
 
       case e: ImplicitCastInputTypes if e.inputTypes.nonEmpty =>
+        CustomLogger.logMatchTime("DARSHANA Match ImplicitTypeCasts", false) {
         val children: Seq[Expression] = e.children.zip(e.inputTypes).map { case (in, expected) =>
           // If we cannot do the implicit cast, just use the original input.
           implicitCast(in, expected).getOrElse(in)
         }
-        e.withNewChildren(children)
+        e.withNewChildren(children)}
 
       case e: ExpectsInputTypes if e.inputTypes.nonEmpty =>
         // Convert NullType into some specific target type for ExpectsInputTypes that don't do
         // general implicit casting.
+        CustomLogger.logMatchTime("DARSHANA Match ImplicitTypeCasts", false) {
         val children: Seq[Expression] = e.children.zip(e.inputTypes).map { case (in, expected) =>
           if (in.dataType == NullType && !expected.acceptsType(NullType)) {
             Literal.create(null, expected.defaultConcreteType)
@@ -688,9 +768,10 @@ abstract class TypeCoercionBase {
             in
           }
         }
-        e.withNewChildren(children)
+        e.withNewChildren(children)}
 
       case udf: ScalaUDF if udf.inputTypes.nonEmpty =>
+        CustomLogger.logMatchTime("DARSHANA Match ImplicitTypeCasts", false) {
         val children = udf.children.zip(udf.inputTypes).map { case (in, expected) =>
           // Currently Scala UDF will only expect `AnyDataType` at top level, so this trick works.
           // In the future we should create types like `AbstractArrayType`, so that Scala UDF can
@@ -705,8 +786,8 @@ abstract class TypeCoercionBase {
           }
 
         }
-        udf.withNewChildren(children)
-    }
+        udf.withNewChildren(children)}
+    }}
 
     private def udfInputToCastType(input: DataType, expectedType: DataType): DataType = {
       (input, expectedType) match {
@@ -739,14 +820,17 @@ abstract class TypeCoercionBase {
    */
   object WindowFrameCoercion extends TypeCoercionRule {
     override protected def coerceTypes(
-        plan: LogicalPlan): LogicalPlan = plan resolveExpressions {
+        plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM WindowFrameCoercion") {
+    plan resolveExpressions {
       case s @ WindowSpecDefinition(_, Seq(order), SpecifiedWindowFrame(RangeFrame, lower, upper))
           if order.resolved =>
+        CustomLogger.logMatchTime("DARSHANA Match WindowFrameCoercion", false) {
         s.copy(frameSpecification = SpecifiedWindowFrame(
           RangeFrame,
           createBoundaryCast(lower, order.dataType),
-          createBoundaryCast(upper, order.dataType)))
-    }
+          createBoundaryCast(upper, order.dataType)))}
+    }}
 
     private def createBoundaryCast(boundary: Expression, dt: DataType): Expression = {
       (boundary, dt) match {
@@ -766,26 +850,31 @@ abstract class TypeCoercionBase {
    * TODO(SPARK-28589): implement ANSI type type coercion and handle string literals.
    */
   object StringLiteralCoercion extends TypeCoercionRule {
-    override protected def coerceTypes(plan: LogicalPlan): LogicalPlan = plan resolveExpressions {
+    override protected def coerceTypes(plan: LogicalPlan): LogicalPlan =
+      CustomLogger.logTransformTime("DARSHANA TRANSFORM StringLiteralCoercion") {
+      plan resolveExpressions {
       // Skip nodes who's children have not been resolved yet.
-      case e if !e.childrenResolved => e
+      case e if !e.childrenResolved =>
+        CustomLogger.logMatchTime("DARSHANA Match StringLiteralCoercion", false) {e}
       case DateAdd(l, r) if r.dataType == StringType && r.foldable =>
+        CustomLogger.logMatchTime("DARSHANA Match StringLiteralCoercion", false) {
         val days = try {
           AnsiCast(r, IntegerType).eval().asInstanceOf[Int]
         } catch {
           case e: NumberFormatException => throw new AnalysisException(
             "The second argument of 'date_add' function needs to be an integer.", cause = Some(e))
         }
-        DateAdd(l, Literal(days))
+        DateAdd(l, Literal(days))}
       case DateSub(l, r) if r.dataType == StringType && r.foldable =>
+        CustomLogger.logMatchTime("DARSHANA Match StringLiteralCoercion", false) {
         val days = try {
           AnsiCast(r, IntegerType).eval().asInstanceOf[Int]
         } catch {
           case e: NumberFormatException => throw new AnalysisException(
             "The second argument of 'date_sub' function needs to be an integer.", cause = Some(e))
         }
-        DateSub(l, Literal(days))
-    }
+        DateSub(l, Literal(days))}
+    }}
   }
 }
 
@@ -1058,47 +1147,71 @@ object TypeCoercion extends TypeCoercionBase {
     }
 
     override protected def coerceTypes(
-        plan: LogicalPlan): LogicalPlan = plan resolveExpressions {
+        plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM PromoteStrings") {
+    plan resolveExpressions {
       // Skip nodes who's children have not been resolved yet.
-      case e if !e.childrenResolved => e
+      case e if !e.childrenResolved =>
+        CustomLogger.logMatchTime("DARSHANA Match PromoteStrings", false) {e}
 
       case a @ BinaryArithmetic(left @ StringType(), right)
         if right.dataType != CalendarIntervalType =>
-        a.makeCopy(Array(Cast(left, DoubleType), right))
+        CustomLogger.logMatchTime("DARSHANA Match PromoteStrings", false) {
+        a.makeCopy(Array(Cast(left, DoubleType), right))}
       case a @ BinaryArithmetic(left, right @ StringType())
         if left.dataType != CalendarIntervalType =>
-        a.makeCopy(Array(left, Cast(right, DoubleType)))
+        CustomLogger.logMatchTime("DARSHANA Match PromoteStrings", false) {
+        a.makeCopy(Array(left, Cast(right, DoubleType)))}
 
       // For equality between string and timestamp we cast the string to a timestamp
       // so that things like rounding of subsecond precision does not affect the comparison.
       case p @ Equality(left @ StringType(), right @ TimestampType()) =>
-        p.makeCopy(Array(Cast(left, TimestampType), right))
+        CustomLogger.logMatchTime("DARSHANA Match PromoteStrings", false) {
+        p.makeCopy(Array(Cast(left, TimestampType), right))}
       case p @ Equality(left @ TimestampType(), right @ StringType()) =>
-        p.makeCopy(Array(left, Cast(right, TimestampType)))
+        CustomLogger.logMatchTime("DARSHANA Match PromoteStrings", false) {
+        p.makeCopy(Array(left, Cast(right, TimestampType)))}
 
       case p @ BinaryComparison(left, right)
           if findCommonTypeForBinaryComparison(left.dataType, right.dataType, conf).isDefined =>
+        CustomLogger.logMatchTime("DARSHANA Match PromoteStrings", false) {
         val commonType = findCommonTypeForBinaryComparison(left.dataType, right.dataType, conf).get
-        p.makeCopy(Array(castExpr(left, commonType), castExpr(right, commonType)))
+        p.makeCopy(Array(castExpr(left, commonType), castExpr(right, commonType)))}
 
-      case Abs(e @ StringType(), failOnError) => Abs(Cast(e, DoubleType), failOnError)
-      case Sum(e @ StringType()) => Sum(Cast(e, DoubleType))
-      case Average(e @ StringType()) => Average(Cast(e, DoubleType))
+      case Abs(e @ StringType(), failOnError) =>
+        CustomLogger.logMatchTime("DARSHANA Match PromoteStrings", false) {
+          Abs(Cast(e, DoubleType), failOnError)}
+      case Sum(e @ StringType()) =>
+        CustomLogger.logMatchTime("DARSHANA Match PromoteStrings", false) {
+          Sum(Cast(e, DoubleType))}
+      case Average(e @ StringType()) =>
+        CustomLogger.logMatchTime("DARSHANA Match PromoteStrings", false) {
+          Average(Cast(e, DoubleType))}
       case s @ StddevPop(e @ StringType(), _) =>
-        s.withNewChildren(Seq(Cast(e, DoubleType)))
+        CustomLogger.logMatchTime("DARSHANA Match PromoteStrings", false) {
+        s.withNewChildren(Seq(Cast(e, DoubleType)))}
       case s @ StddevSamp(e @ StringType(), _) =>
-        s.withNewChildren(Seq(Cast(e, DoubleType)))
-      case m @ UnaryMinus(e @ StringType(), _) => m.withNewChildren(Seq(Cast(e, DoubleType)))
-      case UnaryPositive(e @ StringType()) => UnaryPositive(Cast(e, DoubleType))
+        CustomLogger.logMatchTime("DARSHANA Match PromoteStrings", false) {
+        s.withNewChildren(Seq(Cast(e, DoubleType)))}
+      case m @ UnaryMinus(e @ StringType(), _) =>
+        CustomLogger.logMatchTime("DARSHANA Match PromoteStrings", false) {
+        m.withNewChildren(Seq(Cast(e, DoubleType)))}
+      case UnaryPositive(e @ StringType()) =>
+        CustomLogger.logMatchTime("DARSHANA Match PromoteStrings", false) {
+        UnaryPositive(Cast(e, DoubleType))}
       case v @ VariancePop(e @ StringType(), _) =>
-        v.withNewChildren(Seq(Cast(e, DoubleType)))
+        CustomLogger.logMatchTime("DARSHANA Match PromoteStrings", false) {
+        v.withNewChildren(Seq(Cast(e, DoubleType)))}
       case v @ VarianceSamp(e @ StringType(), _) =>
-        v.withNewChildren(Seq(Cast(e, DoubleType)))
+        CustomLogger.logMatchTime("DARSHANA Match PromoteStrings", false) {
+        v.withNewChildren(Seq(Cast(e, DoubleType)))}
       case s @ Skewness(e @ StringType(), _) =>
-        s.withNewChildren(Seq(Cast(e, DoubleType)))
+        CustomLogger.logMatchTime("DARSHANA Match PromoteStrings", false) {
+        s.withNewChildren(Seq(Cast(e, DoubleType)))}
       case k @ Kurtosis(e @ StringType(), _) =>
-        k.withNewChildren(Seq(Cast(e, DoubleType)))
-    }
+        CustomLogger.logMatchTime("DARSHANA Match PromoteStrings", false) {
+        k.withNewChildren(Seq(Cast(e, DoubleType)))}
+    }}
   }
 
   /**
@@ -1108,9 +1221,12 @@ object TypeCoercion extends TypeCoercionBase {
     private val trueValues = Seq(1.toByte, 1.toShort, 1, 1L, Decimal.ONE)
     private val falseValues = Seq(0.toByte, 0.toShort, 0, 0L, Decimal.ZERO)
 
-    def apply(plan: LogicalPlan): LogicalPlan = plan resolveExpressions {
+    def apply(plan: LogicalPlan): LogicalPlan =
+      CustomLogger.logTransformTime("DARSHANA TRANSFORM BooleanEquality") {
+      plan resolveExpressions {
       // Skip nodes who's children have not been resolved yet.
-      case e if !e.childrenResolved => e
+      case e if !e.childrenResolved =>
+        CustomLogger.logMatchTime("DARSHANA Match BooleanEquality", false) {e}
 
       // Hive treats (true = 1) as true and (false = 0) as true,
       // all other cases are considered as false.
@@ -1118,31 +1234,47 @@ object TypeCoercion extends TypeCoercionBase {
       // We may simplify the expression if one side is literal numeric values
       // TODO: Maybe these rules should go into the optimizer.
       case EqualTo(bool @ BooleanType(), Literal(value, _: NumericType))
-        if trueValues.contains(value) => bool
+        if trueValues.contains(value) =>
+        CustomLogger.logMatchTime("DARSHANA Match BooleanEquality", false) {bool}
       case EqualTo(bool @ BooleanType(), Literal(value, _: NumericType))
-        if falseValues.contains(value) => Not(bool)
+        if falseValues.contains(value) =>
+        CustomLogger.logMatchTime("DARSHANA Match BooleanEquality", false) {Not(bool)}
       case EqualTo(Literal(value, _: NumericType), bool @ BooleanType())
-        if trueValues.contains(value) => bool
+        if trueValues.contains(value) =>
+        CustomLogger.logMatchTime("DARSHANA Match BooleanEquality", false) {bool}
       case EqualTo(Literal(value, _: NumericType), bool @ BooleanType())
-        if falseValues.contains(value) => Not(bool)
+        if falseValues.contains(value) =>
+        CustomLogger.logMatchTime("DARSHANA Match BooleanEquality", false) {Not(bool)}
       case EqualNullSafe(bool @ BooleanType(), Literal(value, _: NumericType))
-        if trueValues.contains(value) => And(IsNotNull(bool), bool)
+        if trueValues.contains(value) =>
+        CustomLogger.logMatchTime("DARSHANA Match BooleanEquality", false) {
+          And(IsNotNull(bool), bool)}
       case EqualNullSafe(bool @ BooleanType(), Literal(value, _: NumericType))
-        if falseValues.contains(value) => And(IsNotNull(bool), Not(bool))
+        if falseValues.contains(value) =>
+        CustomLogger.logMatchTime("DARSHANA Match BooleanEquality", false) {
+          And(IsNotNull(bool), Not(bool))}
       case EqualNullSafe(Literal(value, _: NumericType), bool @ BooleanType())
-        if trueValues.contains(value) => And(IsNotNull(bool), bool)
+        if trueValues.contains(value) =>
+        CustomLogger.logMatchTime("DARSHANA Match BooleanEquality", false) {
+          And(IsNotNull(bool), bool)}
       case EqualNullSafe(Literal(value, _: NumericType), bool @ BooleanType())
-        if falseValues.contains(value) => And(IsNotNull(bool), Not(bool))
+        if falseValues.contains(value) =>
+        CustomLogger.logMatchTime("DARSHANA Match BooleanEquality", false) {
+          And(IsNotNull(bool), Not(bool))}
 
       case EqualTo(left @ BooleanType(), right @ NumericType()) =>
-        EqualTo(Cast(left, right.dataType), right)
+        CustomLogger.logMatchTime("DARSHANA Match BooleanEquality", false) {
+        EqualTo(Cast(left, right.dataType), right)}
       case EqualTo(left @ NumericType(), right @ BooleanType()) =>
-        EqualTo(left, Cast(right, left.dataType))
+        CustomLogger.logMatchTime("DARSHANA Match BooleanEquality", false) {
+        EqualTo(left, Cast(right, left.dataType))}
       case EqualNullSafe(left @ BooleanType(), right @ NumericType()) =>
-        EqualNullSafe(Cast(left, right.dataType), right)
+        CustomLogger.logMatchTime("DARSHANA Match BooleanEquality", false) {
+        EqualNullSafe(Cast(left, right.dataType), right)}
       case EqualNullSafe(left @ NumericType(), right @ BooleanType()) =>
-        EqualNullSafe(left, Cast(right, left.dataType))
-    }
+        CustomLogger.logMatchTime("DARSHANA Match BooleanEquality", false) {
+        EqualNullSafe(left, Cast(right, left.dataType))}
+    }}
   }
 }
 

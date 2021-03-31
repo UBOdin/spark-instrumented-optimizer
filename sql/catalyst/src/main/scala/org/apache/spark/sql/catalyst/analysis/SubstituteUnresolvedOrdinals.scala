@@ -17,6 +17,7 @@
 
 package org.apache.spark.sql.catalyst.analysis
 
+import org.apache.spark.sql.catalyst.CustomLogger
 import org.apache.spark.sql.catalyst.expressions.{Expression, Literal, SortOrder}
 import org.apache.spark.sql.catalyst.plans.logical.{Aggregate, LogicalPlan, Sort}
 import org.apache.spark.sql.catalyst.rules.Rule
@@ -32,22 +33,26 @@ object SubstituteUnresolvedOrdinals extends Rule[LogicalPlan] {
     case _ => false
   }
 
-  def apply(plan: LogicalPlan): LogicalPlan = plan resolveOperators {
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM SubstituteUnresolvedOrdinals") {
+    plan resolveOperators {
     case s: Sort if conf.orderByOrdinal && s.order.exists(o => isIntLiteral(o.child)) =>
+      CustomLogger.logMatchTime("DARSHANA Match SubstituteUnresolvedOrdinals", true) {
       val newOrders = s.order.map {
         case order @ SortOrder(ordinal @ Literal(index: Int, IntegerType), _, _, _) =>
           val newOrdinal = withOrigin(ordinal.origin)(UnresolvedOrdinal(index))
           withOrigin(order.origin)(order.copy(child = newOrdinal))
         case other => other
       }
-      withOrigin(s.origin)(s.copy(order = newOrders))
+      withOrigin(s.origin)(s.copy(order = newOrders))}
 
     case a: Aggregate if conf.groupByOrdinal && a.groupingExpressions.exists(isIntLiteral) =>
+      CustomLogger.logMatchTime("DARSHANA Match SubstituteUnresolvedOrdinals", true) {
       val newGroups = a.groupingExpressions.map {
         case ordinal @ Literal(index: Int, IntegerType) =>
           withOrigin(ordinal.origin)(UnresolvedOrdinal(index))
         case other => other
       }
-      withOrigin(a.origin)(a.copy(groupingExpressions = newGroups))
-  }
+      withOrigin(a.origin)(a.copy(groupingExpressions = newGroups))}
+  }}
 }

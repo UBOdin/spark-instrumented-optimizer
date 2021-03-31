@@ -17,6 +17,7 @@
 
 package org.apache.spark.sql.catalyst.optimizer
 
+import org.apache.spark.sql.catalyst.CustomLogger
 import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.catalyst.plans._
 import org.apache.spark.sql.catalyst.plans.logical._
@@ -34,12 +35,15 @@ import org.apache.spark.sql.catalyst.rules.Rule
 object PushDownLeftSemiAntiJoin extends Rule[LogicalPlan]
   with PredicateHelper
   with JoinSelectionHelper {
-  def apply(plan: LogicalPlan): LogicalPlan = plan transform {
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM PushDownLeftSemiAntiJoin") {
+    plan transform {
     // LeftSemi/LeftAnti over Project
     case Join(p @ Project(pList, gChild), rightOp, LeftSemiOrAnti(joinType), joinCond, hint)
         if pList.forall(_.deterministic) &&
         !pList.exists(ScalarSubquery.hasCorrelatedScalarSubquery) &&
         canPushThroughCondition(Seq(gChild), joinCond, rightOp) =>
+      CustomLogger.logMatchTime("DARSHANA Match PushDownLeftSemiAntiJoin", true) {
       if (joinCond.isEmpty) {
         // No join condition, just push down the Join below Project
         p.copy(child = Join(gChild, rightOp, joinType, joinCond, hint))
@@ -51,13 +55,14 @@ object PushDownLeftSemiAntiJoin extends Rule[LogicalPlan]
           joinCond
         }
         p.copy(child = Join(gChild, rightOp, joinType, newJoinCond, hint))
-      }
+      }}
 
     // LeftSemi/LeftAnti over Aggregate, only push down if join can be planned as broadcast join.
     case join @ Join(agg: Aggregate, rightOp, LeftSemiOrAnti(_), _, _)
         if agg.aggregateExpressions.forall(_.deterministic) && agg.groupingExpressions.nonEmpty &&
           !agg.aggregateExpressions.exists(ScalarSubquery.hasCorrelatedScalarSubquery) &&
           canPlanAsBroadcastHashJoin(join, conf) =>
+      CustomLogger.logMatchTime("DARSHANA Match PushDownLeftSemiAntiJoin", true) {
       val aliasMap = getAliasMap(agg)
       val canPushDownPredicate = (predicate: Expression) => {
         val replaced = replaceAlias(predicate, aliasMap)
@@ -67,17 +72,19 @@ object PushDownLeftSemiAntiJoin extends Rule[LogicalPlan]
       val makeJoinCondition = (predicates: Seq[Expression]) => {
         replaceAlias(predicates.reduce(And), aliasMap)
       }
-      pushDownJoin(join, canPushDownPredicate, makeJoinCondition)
+      pushDownJoin(join, canPushDownPredicate, makeJoinCondition)}
 
     // LeftSemi/LeftAnti over Window
     case join @ Join(w: Window, rightOp, LeftSemiOrAnti(_), _, _)
         if w.partitionSpec.forall(_.isInstanceOf[AttributeReference]) =>
+      CustomLogger.logMatchTime("DARSHANA Match PushDownLeftSemiAntiJoin", true) {
       val partitionAttrs = AttributeSet(w.partitionSpec.flatMap(_.references)) ++ rightOp.outputSet
-      pushDownJoin(join, _.references.subsetOf(partitionAttrs), _.reduce(And))
+      pushDownJoin(join, _.references.subsetOf(partitionAttrs), _.reduce(And))}
 
     // LeftSemi/LeftAnti over Union
     case Join(union: Union, rightOp, LeftSemiOrAnti(joinType), joinCond, hint)
         if canPushThroughCondition(union.children, joinCond, rightOp) =>
+      CustomLogger.logMatchTime("DARSHANA Match PushDownLeftSemiAntiJoin", true) {
       if (joinCond.isEmpty) {
         // Push down the Join below Union
         val newGrandChildren = union.children.map { Join(_, rightOp, joinType, joinCond, hint) }
@@ -93,14 +100,15 @@ object PushDownLeftSemiAntiJoin extends Rule[LogicalPlan]
           Join(grandchild, rightOp, joinType, Option(newCond), hint)
         }
         union.withNewChildren(newGrandChildren)
-      }
+      }}
 
     // LeftSemi/LeftAnti over UnaryNode
     case join @ Join(u: UnaryNode, rightOp, LeftSemiOrAnti(_), _, _)
         if PushPredicateThroughNonJoin.canPushThrough(u) && u.expressions.forall(_.deterministic) =>
+      CustomLogger.logMatchTime("DARSHANA Match PushDownLeftSemiAntiJoin", true) {
       val validAttrs = u.child.outputSet ++ rightOp.outputSet
-      pushDownJoin(join, _.references.subsetOf(validAttrs), _.reduce(And))
-  }
+      pushDownJoin(join, _.references.subsetOf(validAttrs), _.reduce(And))}
+  }}
 
   /**
    * Check if we can safely push a join through a project or union by making sure that attributes
@@ -240,9 +248,12 @@ object PushLeftSemiLeftAntiThroughJoin extends Rule[LogicalPlan] with PredicateH
     }
   }
 
-  def apply(plan: LogicalPlan): LogicalPlan = plan transform {
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM PushLeftSemiLeftAntiThroughJoin") {
+    plan transform {
     // push LeftSemi/LeftAnti down into the join below
     case j @ Join(AllowedJoin(left), right, LeftSemiOrAnti(joinType), joinCond, parentHint) =>
+      CustomLogger.logMatchTime("DARSHANA Match PushLeftSemiLeftAntiThroughJoin", true) {
       val (childJoinType, childLeft, childRight, childCondition, childHint) =
         (left.joinType, left.left, left.right, left.condition, left.hint)
       val action = pushTo(left, right, joinCond)
@@ -261,8 +272,8 @@ object PushLeftSemiLeftAntiThroughJoin extends Rule[LogicalPlan] with PredicateH
         case _ =>
           // Do nothing
           j
-      }
-  }
+      }}
+  }}
 }
 
 

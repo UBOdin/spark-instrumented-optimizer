@@ -17,6 +17,7 @@
 
 package org.apache.spark.sql.catalyst.analysis
 
+import org.apache.spark.sql.catalyst.CustomLogger
 import org.apache.spark.sql.catalyst.plans.logical.{LogicalPlan, View}
 import org.apache.spark.sql.catalyst.rules.Rule
 
@@ -30,9 +31,12 @@ import org.apache.spark.sql.catalyst.rules.Rule
  * view.
  */
 object EliminateView extends Rule[LogicalPlan] with CastSupport {
-  override def apply(plan: LogicalPlan): LogicalPlan = plan transformUp {
-    case View(_, _, child) => child
-  }
+  override def apply(plan: LogicalPlan): LogicalPlan =
+CustomLogger.logTransformTime("DARSHANA TRANSFORM EliminateView") {
+plan transformUp {
+case View(_, _, child) =>
+CustomLogger.logMatchTime("DARSHANA Match 1 EliminateView", true) {child}
+}}
 }
 
 /**

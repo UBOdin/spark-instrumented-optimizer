@@ -20,6 +20,7 @@ package org.apache.spark.sql.catalyst.optimizer
 import scala.collection.mutable.ArrayBuffer
 
 import org.apache.spark.sql.AnalysisException
+import org.apache.spark.sql.catalyst.CustomLogger
 import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.catalyst.expressions.SubExprUtils._
 import org.apache.spark.sql.catalyst.expressions.aggregate._
@@ -92,9 +93,12 @@ object RewritePredicateSubquery extends Rule[LogicalPlan] with PredicateHelper {
     }
   }
 
-  def apply(plan: LogicalPlan): LogicalPlan = plan transform {
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM RewritePredicateSubquery") {
+    plan transform {
     case Filter(condition, child)
       if SubqueryExpression.hasInOrCorrelatedExistsSubquery(condition) =>
+      CustomLogger.logMatchTime("DARSHANA Match RewritePredicateSubquery", true) {
       val (withSubquery, withoutSubquery) =
         splitConjunctivePredicates(condition)
           .partition(SubqueryExpression.hasInOrCorrelatedExistsSubquery)
@@ -148,8 +152,8 @@ object RewritePredicateSubquery extends Rule[LogicalPlan] with PredicateHelper {
         case (p, predicate) =>
           val (newCond, inputPlan) = rewriteExistentialExpr(Seq(predicate), p)
           Project(p.output, Filter(newCond.get, inputPlan))
-      }
-  }
+      }}
+  }}
 
   /**
    * Given a predicate expression and an input plan, it rewrites any embedded existential sub-query
@@ -323,15 +327,20 @@ object PullupCorrelatedPredicates extends Rule[LogicalPlan] with PredicateHelper
   /**
    * Pull up the correlated predicates and rewrite all subqueries in an operator tree..
    */
-  def apply(plan: LogicalPlan): LogicalPlan = plan transformUp {
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM PullupCorrelatedPredicates") {
+    plan transformUp {
     case f @ Filter(_, a: Aggregate) =>
-      rewriteSubQueries(f, Seq(a, a.child))
+      CustomLogger.logMatchTime("DARSHANA Match PullupCorrelatedPredicates", true) {
+      rewriteSubQueries(f, Seq(a, a.child))}
     // Only a few unary nodes (Project/Filter/Aggregate) can contain subqueries.
     case q: UnaryNode =>
-      rewriteSubQueries(q, q.children)
+      CustomLogger.logMatchTime("DARSHANA Match PullupCorrelatedPredicates", true) {
+      rewriteSubQueries(q, q.children)}
     case s: SupportsSubquery =>
-      rewriteSubQueries(s, s.children)
-  }
+      CustomLogger.logMatchTime("DARSHANA Match PullupCorrelatedPredicates", true) {
+      rewriteSubQueries(s, s.children)}
+  }}
 }
 
 /**
@@ -611,8 +620,11 @@ object RewriteCorrelatedScalarSubquery extends Rule[LogicalPlan] with AliasHelpe
    * Rewrite [[Filter]], [[Project]] and [[Aggregate]] plans containing correlated scalar
    * subqueries.
    */
-  def apply(plan: LogicalPlan): LogicalPlan = plan transformUpWithNewOutput {
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM RewriteCorrelatedScalarSubquery") {
+    plan transformUpWithNewOutput {
     case a @ Aggregate(grouping, expressions, child) =>
+      CustomLogger.logMatchTime("DARSHANA Match RewriteCorrelatedScalarSubquery", true) {
       val subqueries = ArrayBuffer.empty[ScalarSubquery]
       val rewriteExprs = expressions.map(extractCorrelatedScalarSubqueries(_, subqueries))
       if (subqueries.nonEmpty) {
@@ -629,8 +641,9 @@ object RewriteCorrelatedScalarSubquery extends Rule[LogicalPlan] with AliasHelpe
         newAgg -> attrMapping
       } else {
         a -> Nil
-      }
+      }}
     case p @ Project(expressions, child) =>
+      CustomLogger.logMatchTime("DARSHANA Match RewriteCorrelatedScalarSubquery", true) {
       val subqueries = ArrayBuffer.empty[ScalarSubquery]
       val rewriteExprs = expressions.map(extractCorrelatedScalarSubqueries(_, subqueries))
       if (subqueries.nonEmpty) {
@@ -641,8 +654,9 @@ object RewriteCorrelatedScalarSubquery extends Rule[LogicalPlan] with AliasHelpe
         newProj -> attrMapping
       } else {
         p -> Nil
-      }
+      }}
     case f @ Filter(condition, child) =>
+      CustomLogger.logMatchTime("DARSHANA Match RewriteCorrelatedScalarSubquery", true) {
       val subqueries = ArrayBuffer.empty[ScalarSubquery]
       val rewriteCondition = extractCorrelatedScalarSubqueries(condition, subqueries)
       if (subqueries.nonEmpty) {
@@ -653,6 +667,6 @@ object RewriteCorrelatedScalarSubquery extends Rule[LogicalPlan] with AliasHelpe
         newProj -> attrMapping
       } else {
         f -> Nil
-      }
-  }
+      }}
+  }}
 }

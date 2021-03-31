@@ -18,7 +18,6 @@ package org.apache.spark.sql.execution.datasources.v2
 
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.connector.read.{InputPartition, PartitionReader, PartitionReaderFactory}
-import org.apache.spark.sql.errors.QueryExecutionErrors
 import org.apache.spark.sql.execution.datasources.{FilePartition, PartitionedFile}
 import org.apache.spark.sql.vectorized.ColumnarBatch
 
@@ -44,7 +43,7 @@ abstract class FilePartitionReaderFactory extends PartitionReaderFactory {
   def buildReader(partitionedFile: PartitionedFile): PartitionReader[InternalRow]
 
   def buildColumnarReader(partitionedFile: PartitionedFile): PartitionReader[ColumnarBatch] = {
-    throw QueryExecutionErrors.cannotCreateColumnarReaderError()
+    throw new UnsupportedOperationException("Cannot create columnar reader.")
   }
 }
 

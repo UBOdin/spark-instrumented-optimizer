@@ -17,6 +17,7 @@
 
 package org.apache.spark.sql.catalyst.analysis
 
+import org.apache.spark.sql.catalyst.CustomLogger
 import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.catalyst.plans.logical._
 import org.apache.spark.sql.catalyst.rules.Rule
@@ -26,34 +27,46 @@ import org.apache.spark.sql.catalyst.rules.Rule
  * put them into an inner Project and finally project them away at the outer Project.
  */
 object PullOutNondeterministic extends Rule[LogicalPlan] {
-  override def apply(plan: LogicalPlan): LogicalPlan = plan resolveOperatorsUp applyLocally
+  override def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM PullOutNondeterministic") {
+    plan resolveOperatorsUp applyLocally}
 
   val applyLocally: PartialFunction[LogicalPlan, LogicalPlan] = {
-    case p if !p.resolved => p // Skip unresolved nodes.
-    case p: Project => p
-    case f: Filter => f
+    case p if !p.resolved =>
+      CustomLogger.logMatchTime("DARSHANA Match PullOutNondeterministic", true) {
+      p} // Skip unresolved nodes.
+    case p: Project =>
+      CustomLogger.logMatchTime("DARSHANA Match PullOutNondeterministic", true) {
+      p}
+    case f: Filter =>
+      CustomLogger.logMatchTime("DARSHANA Match PullOutNondeterministic", true) {
+      f}
 
     case a: Aggregate if a.groupingExpressions.exists(!_.deterministic) =>
+      CustomLogger.logMatchTime("DARSHANA Match PullOutNondeterministic", true) {
       val nondeterToAttr = getNondeterToAttr(a.groupingExpressions)
       val newChild = Project(a.child.output ++ nondeterToAttr.values, a.child)
       a.transformExpressions { case e =>
         nondeterToAttr.get(e).map(_.toAttribute).getOrElse(e)
-      }.copy(child = newChild)
+      }.copy(child = newChild)}
 
     // Don't touch collect metrics. Top-level metrics are not supported (check analysis will fail)
     // and we want to retain them inside the aggregate functions.
-    case m: CollectMetrics => m
+    case m: CollectMetrics =>
+      CustomLogger.logMatchTime("DARSHANA Match PullOutNondeterministic", true) {
+      m}
 
     // todo: It's hard to write a general rule to pull out nondeterministic expressions
     // from LogicalPlan, currently we only do it for UnaryNode which has same output
     // schema with its child.
     case p: UnaryNode if p.output == p.child.output && p.expressions.exists(!_.deterministic) =>
+      CustomLogger.logMatchTime("DARSHANA Match PullOutNondeterministic", true) {
       val nondeterToAttr = getNondeterToAttr(p.expressions)
       val newPlan = p.transformExpressions { case e =>
         nondeterToAttr.get(e).map(_.toAttribute).getOrElse(e)
       }
       val newChild = Project(p.child.output ++ nondeterToAttr.values, p.child)
-      Project(p.output, newPlan.withNewChildren(newChild :: Nil))
+      Project(p.output, newPlan.withNewChildren(newChild :: Nil))}
   }
 
   private def getNondeterToAttr(exprs: Seq[Expression]): Map[Expression, NamedExpression] = {

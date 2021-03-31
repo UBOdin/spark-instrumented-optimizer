@@ -22,8 +22,6 @@ import org.apache.spark.sql.AnalysisException
 import org.apache.spark.sql.catalyst.dsl.expressions._
 import org.apache.spark.sql.catalyst.expressions.codegen.CodegenContext
 import org.apache.spark.sql.catalyst.expressions.codegen.GenerateUnsafeProjection
-import org.apache.spark.sql.catalyst.optimizer.ConstantFolding
-import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.types.StringType
 
 /**
@@ -471,13 +469,5 @@ class RegexpExpressionsSuite extends SparkFunSuite with ExpressionEvalHelper {
       .getDeclaredFields.filter(_.getName.endsWith("cache")).head
     cache.setAccessible(true)
     assert(cache.get(expr).asInstanceOf[java.util.regex.Pattern].pattern().contains("a"))
-  }
-
-  test("SPARK-34814: LikeSimplification should handle NULL") {
-    withSQLConf(SQLConf.OPTIMIZER_EXCLUDED_RULES.key ->
-      ConstantFolding.getClass.getName.stripSuffix("$")) {
-      checkEvaluation(Literal.create("foo", StringType)
-        .likeAll("%foo%", Literal.create(null, StringType)), null)
-    }
   }
 }

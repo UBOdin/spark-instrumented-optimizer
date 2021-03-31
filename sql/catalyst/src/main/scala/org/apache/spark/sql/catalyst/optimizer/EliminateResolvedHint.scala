@@ -17,6 +17,7 @@
 
 package org.apache.spark.sql.catalyst.optimizer
 
+import org.apache.spark.sql.catalyst.CustomLogger
 import org.apache.spark.sql.catalyst.plans.logical._
 import org.apache.spark.sql.catalyst.rules.Rule
 
@@ -31,18 +32,23 @@ object EliminateResolvedHint extends Rule[LogicalPlan] {
   // This is also called in the beginning of the optimization phase, and as a result
   // is using transformUp rather than resolveOperators.
   def apply(plan: LogicalPlan): LogicalPlan = {
-    val pulledUp = plan transformUp {
+    val pulledUp =
+      CustomLogger.logTransformTime("DARSHANA TRANSFORM EliminateResolvedHint") {
+      plan transformUp {
       case j: Join if j.hint == JoinHint.NONE =>
+        CustomLogger.logMatchTime("DARSHANA Match EliminateResolvedHint", true) {
         val (newLeft, leftHints) = extractHintsFromPlan(j.left)
         val (newRight, rightHints) = extractHintsFromPlan(j.right)
         val newJoinHint = JoinHint(mergeHints(leftHints), mergeHints(rightHints))
-        j.copy(left = newLeft, right = newRight, hint = newJoinHint)
-    }
+        j.copy(left = newLeft, right = newRight, hint = newJoinHint)}
+    }}
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM Not Nested EliminateResolvedHint") {
     pulledUp.transformUp {
       case h: ResolvedHint =>
+        CustomLogger.logMatchTime("DARSHANA Match EliminateResolvedHint", true) {
         hintErrorHandler.joinNotFoundForJoinHint(h.hints)
-        h.child
-    }
+        h.child}
+    }}
   }
 
   /**

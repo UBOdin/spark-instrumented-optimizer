@@ -20,6 +20,7 @@ package org.apache.spark.sql.catalyst.analysis
 import java.util.Locale
 
 import org.apache.spark.sql.AnalysisException
+import org.apache.spark.sql.catalyst.CustomLogger
 import org.apache.spark.sql.catalyst.expressions.{Alias, Expression}
 import org.apache.spark.sql.catalyst.plans.logical.{LogicalPlan, Project, Range}
 import org.apache.spark.sql.catalyst.rules._
@@ -106,11 +107,14 @@ object ResolveTableValuedFunctions extends Rule[LogicalPlan] {
       })
   )
 
-  override def apply(plan: LogicalPlan): LogicalPlan = plan resolveOperators {
+  override def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM ResolveTableValuedFunctions") {
+    plan resolveOperators {
     case u: UnresolvedTableValuedFunction if u.functionArgs.forall(_.resolved) =>
       // The whole resolution is somewhat difficult to understand here due to too much abstractions.
       // We should probably rewrite the following at some point. Reynold was just here to improve
       // error messages and didn't have time to do a proper rewrite.
+      CustomLogger.logMatchTime("DARSHANA Match ResolveTableValuedFunctions", true) {
       val resolvedFunc = builtinFunctions.get(u.name.funcName.toLowerCase(Locale.ROOT)) match {
         case Some(tvf) =>
 
@@ -157,6 +161,6 @@ object ResolveTableValuedFunctions extends Rule[LogicalPlan] {
         Project(aliases, resolvedFunc)
       } else {
         resolvedFunc
-      }
-  }
+      }}
+  }}
 }

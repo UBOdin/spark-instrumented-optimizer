@@ -17,6 +17,7 @@
 
 package org.apache.spark.sql.catalyst.analysis
 
+import org.apache.spark.sql.catalyst.CustomLogger
 import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.catalyst.expressions.Literal._
 import org.apache.spark.sql.catalyst.plans.logical.LogicalPlan
@@ -82,11 +83,15 @@ object DecimalPrecision extends TypeCoercionRule {
 
   private def nullOnOverflow: Boolean = !conf.ansiEnabled
 
-  override protected def coerceTypes(plan: LogicalPlan): LogicalPlan = plan resolveOperators {
+  override protected def coerceTypes(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM DecimalPrecision") {
+    plan resolveOperators {
     // fix decimal precision for expressions
-    case q => q.transformExpressionsUp(
-      decimalAndDecimal.orElse(integralAndDecimalLiteral).orElse(nondecimalAndDecimal))
-  }
+    case q =>
+      CustomLogger.logMatchTime("DARSHANA Match DecimalPrecision", true) {
+      q.transformExpressionsUp(
+      decimalAndDecimal.orElse(integralAndDecimalLiteral).orElse(nondecimalAndDecimal))}
+  }}
 
   /** Decimal precision promotion for +, -, *, /, %, pmod, and binary comparison. */
   private[catalyst] val decimalAndDecimal: PartialFunction[Expression, Expression] = {

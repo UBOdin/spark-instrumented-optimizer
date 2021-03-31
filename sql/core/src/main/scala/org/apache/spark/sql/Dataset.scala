@@ -34,7 +34,7 @@ import org.apache.spark.api.python.{PythonRDD, SerDeUtil}
 import org.apache.spark.api.r.RRDD
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.rdd.RDD
-import org.apache.spark.sql.catalyst.{CatalystTypeConverters, InternalRow, ScalaReflection}
+import org.apache.spark.sql.catalyst.{CatalystTypeConverters, CustomLogger, InternalRow, ScalaReflection}
 import org.apache.spark.sql.catalyst.QueryPlanningTracker
 import org.apache.spark.sql.catalyst.analysis._
 import org.apache.spark.sql.catalyst.catalog.HiveTableRelation
@@ -552,9 +552,18 @@ class Dataset[T] private[sql](
     // `ExplainCommand` analyzes input query plan and resolves temporary views again. Using
     // `ExplainCommand` here will probably output different query plans, compared to the results
     // of evaluation of the Dataset. So just output QueryExecution's query plans here.
-
+    // DARSHANA: Custom Explain
     // scalastyle:off println
-    println(queryExecution.explainString(ExplainMode.fromString(mode)))
+    println("DARSHANA: Using the custom explain without println")
+    queryExecution.explainString(ExplainMode.fromString(mode))
+    CustomLogger.assertNumbers("DARSHANA: Explain assert")
+    CustomLogger.ASTSize("DARSHANA: Explain ", queryExecution.optimizedPlan.map{_ => 1}.sum,
+      queryExecution.analyzed.map{_ => 1}.sum)
+    CustomLogger.printTotalTiming("DARSHANA: Explain ")
+    CustomLogger.printAllRulesSet("DARSHANA: Explain Effective Rules ")
+    // scalastyle:on println
+    // scalastyle:off println
+    // println(queryExecution.explainString(ExplainMode.fromString(mode)))
     // scalastyle:on println
   }
 
@@ -825,8 +834,10 @@ class Dataset[T] private[sql](
   // scalastyle:off println
   def show(numRows: Int, truncate: Boolean): Unit = if (truncate) {
     println(showString(numRows, truncate = 20))
+    CustomLogger.printTotalTiming("DARSHANA: Show ")
   } else {
     println(showString(numRows, truncate = 0))
+    CustomLogger.printTotalTiming("DARSHANA: Show ")
   }
 
   /**

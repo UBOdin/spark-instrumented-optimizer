@@ -19,13 +19,14 @@ package org.apache.spark.sql.catalyst.expressions.aggregate
 
 import org.apache.spark.sql.catalyst.dsl.expressions._
 import org.apache.spark.sql.catalyst.expressions.{AttributeReference, Expression, ImplicitCastInputTypes, Literal}
-import org.apache.spark.sql.catalyst.trees.UnaryLike
 import org.apache.spark.sql.types.{AbstractDataType, DataType, DoubleType}
 
 
 /** Multiply numerical values within an aggregation group */
 case class Product(child: Expression)
-    extends DeclarativeAggregate with ImplicitCastInputTypes with UnaryLike[Expression] {
+    extends DeclarativeAggregate with ImplicitCastInputTypes {
+
+  override def children: Seq[Expression] = child :: Nil
 
   override def nullable: Boolean = true
 

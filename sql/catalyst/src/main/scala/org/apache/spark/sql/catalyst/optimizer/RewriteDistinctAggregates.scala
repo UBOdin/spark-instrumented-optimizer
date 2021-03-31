@@ -17,6 +17,7 @@
 
 package org.apache.spark.sql.catalyst.optimizer
 
+import org.apache.spark.sql.catalyst.CustomLogger
 import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.catalyst.expressions.aggregate._
 import org.apache.spark.sql.catalyst.plans.logical.{Aggregate, Expand, LogicalPlan}
@@ -206,9 +207,13 @@ object RewriteDistinctAggregates extends Rule[LogicalPlan] {
     distinctAggs.size > 1 || distinctAggs.exists(_.filter.isDefined)
   }
 
-  def apply(plan: LogicalPlan): LogicalPlan = plan transformUp {
-    case a: Aggregate if mayNeedtoRewrite(a) => rewrite(a)
-  }
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("DARSHANA TRANSFORM RewriteDistinctAggregates") {
+    plan transformUp {
+    case a: Aggregate if mayNeedtoRewrite(a) =>
+      CustomLogger.logMatchTime("DARSHANA Match RewriteDistinctAggregates", true) {
+      rewrite(a)}
+  }}
 
   def rewrite(a: Aggregate): Aggregate = {
 

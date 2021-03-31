@@ -17,6 +17,7 @@
 
 package org.apache.spark.sql.catalyst.analysis
 
+import org.apache.spark.sql.catalyst.CustomLogger
 import org.apache.spark.sql.catalyst.plans.logical.{DropTable, DropView, LogicalPlan, NoopCommand, UncacheTable}
 import org.apache.spark.sql.catalyst.rules.Rule
 
@@ -26,12 +27,17 @@ import org.apache.spark.sql.catalyst.rules.Rule
  * resolved. If the "ifExists" flag is set to true. the plan is resolved to [[NoopCommand]],
  */
 object ResolveCommandsWithIfExists extends Rule[LogicalPlan] {
-  def apply(plan: LogicalPlan): LogicalPlan = plan.resolveOperatorsUp {
+  def apply(plan: LogicalPlan): LogicalPlan =
+CustomLogger.logTransformTime("DARSHANA TRANSFORM ResolveCommandsWithIfExists") {
+plan.resolveOperatorsUp {
     case DropTable(u: UnresolvedTableOrView, ifExists, _) if ifExists =>
-      NoopCommand("DROP TABLE", u.multipartIdentifier)
+      CustomLogger.logMatchTime("DARSHANA Match ResolveCommandsWithIfExists", true) {
+      NoopCommand("DROP TABLE", u.multipartIdentifier)}
     case DropView(u: UnresolvedView, ifExists) if ifExists =>
-      NoopCommand("DROP VIEW", u.multipartIdentifier)
+      CustomLogger.logMatchTime("DARSHANA Match ResolveCommandsWithIfExists", true) {
+      NoopCommand("DROP VIEW", u.multipartIdentifier)}
     case UncacheTable(u: UnresolvedRelation, ifExists, _) if ifExists =>
-      NoopCommand("UNCACHE TABLE", u.multipartIdentifier)
-  }
+      CustomLogger.logMatchTime("DARSHANA Match ResolveCommandsWithIfExists", true) {
+      NoopCommand("UNCACHE TABLE", u.multipartIdentifier)}
+  }}
 }
