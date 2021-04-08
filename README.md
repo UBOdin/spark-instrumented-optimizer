@@ -1,3 +1,9 @@
+
+## Testing the instrumented spark.
+All tests scripts are in /tpch
+
+All the generation scripts and plotting scripts are in /spark_scripts
+
 # Apache Spark
 
 Spark is a unified analytics engine for large-scale data processing. It provides
