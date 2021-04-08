@@ -23,7 +23,7 @@ with open(createtablefile) as fp:
 			table_line = line
 			table = table_line.split('CREATE TABLE', maxsplit=1)[-1].split(maxsplit=1)[0]
 			# csv_file = "/Users/darshanabalakrishnan/Desktop/Spark_Scratch/tpch/tpch_table/"+table+".tbl"
-			csv_file = "/home/csgrad/dbalakri/Spark_scratch/tpch/tpch_table/"+table+".csv"
+			csv_file = "/home/csgrad/dbalakri/Spark_scratch/tpch/tpch_table/"+table+".tbl"
 			csv_path = " USING csv OPTIONS(path \'"+csv_file+"\', delimiter \'|\')"
 			create_table_commands.append("spark.sql(\""+line+csv_path+ "\")\n")
 			createcount += 1
