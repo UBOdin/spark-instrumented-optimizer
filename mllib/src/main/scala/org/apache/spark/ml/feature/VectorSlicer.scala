@@ -110,21 +110,22 @@ final class VectorSlicer @Since("1.5.0") (@Since("1.5.0") override val uid: Stri
     }
 
     // Prepare output attributes
-    val selectedIndices = getSelectedFeatureIndices(dataset.schema)
-    val selectedAttrs = inputAttr.attributes.map { attrs => selectedIndices.map(attrs.apply) }
+    val inds = getSelectedFeatureIndices(dataset.schema)
+    val selectedAttrs = inputAttr.attributes.map { attrs =>
+      inds.map(index => attrs(index))
+    }
     val outputAttr = selectedAttrs match {
       case Some(attrs) => new AttributeGroup($(outputCol), attrs)
-      case None => new AttributeGroup($(outputCol), selectedIndices.length)
+      case None => new AttributeGroup($(outputCol), inds.length)
     }
 
-    val sorted = selectedIndices.length > 1 && selectedIndices.sliding(2).forall(t => t(1) > t(0))
+    // Select features
     val slicer = udf { vec: Vector =>
       vec match {
-        case dv: DenseVector => Vectors.dense(selectedIndices.map(dv.apply))
-        case sv: SparseVector => sv.slice(selectedIndices, sorted)
+        case features: DenseVector => Vectors.dense(inds.map(features.apply))
+        case features: SparseVector => features.slice(inds)
       }
     }
-
     dataset.withColumn($(outputCol), slicer(dataset($(inputCol))), outputAttr.toMetadata())
   }
 

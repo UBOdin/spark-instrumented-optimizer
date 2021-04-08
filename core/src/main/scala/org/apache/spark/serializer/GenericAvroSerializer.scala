@@ -26,7 +26,7 @@ import scala.collection.mutable
 import com.esotericsoftware.kryo.{Kryo, Serializer => KSerializer}
 import com.esotericsoftware.kryo.io.{Input => KryoInput, Output => KryoOutput}
 import org.apache.avro.{Schema, SchemaNormalization}
-import org.apache.avro.generic.{GenericContainer, GenericData}
+import org.apache.avro.generic.{GenericData, GenericRecord}
 import org.apache.avro.io._
 import org.apache.commons.io.IOUtils
 
@@ -35,7 +35,7 @@ import org.apache.spark.io.CompressionCodec
 import org.apache.spark.util.Utils
 
 /**
- * Custom serializer used for generic Avro containers. If the user registers the schemas
+ * Custom serializer used for generic Avro records. If the user registers the schemas
  * ahead of time, then the schema's fingerprint will be sent with each message instead of the actual
  * schema, as to reduce network IO.
  * Actions like parsing or compressing schemas are computationally expensive so the serializer
@@ -43,10 +43,9 @@ import org.apache.spark.util.Utils
  * @param schemas a map where the keys are unique IDs for Avro schemas and the values are the
  *                string representation of the Avro schema, used to decrease the amount of data
  *                that needs to be serialized.
- * @tparam D the subtype of [[GenericContainer]] handled by this serializer
  */
-private[serializer] class GenericAvroSerializer[D <: GenericContainer]
-  (schemas: Map[Long, String]) extends KSerializer[D] {
+private[serializer] class GenericAvroSerializer(schemas: Map[Long, String])
+  extends KSerializer[GenericRecord] {
 
   /** Used to reduce the amount of effort to compress the schema */
   private val compressCache = new mutable.HashMap[Schema, Array[Byte]]()
@@ -101,10 +100,10 @@ private[serializer] class GenericAvroSerializer[D <: GenericContainer]
   })
 
   /**
-   * Serializes a generic container to the given output stream. It caches a lot of the internal
-   * data as to not redo work
+   * Serializes a record to the given output stream. It caches a lot of the internal data as
+   * to not redo work
    */
-  def serializeDatum(datum: D, output: KryoOutput): Unit = {
+  def serializeDatum[R <: GenericRecord](datum: R, output: KryoOutput): Unit = {
     val encoder = EncoderFactory.get.binaryEncoder(output, null)
     val schema = datum.getSchema
     val fingerprint = fingerprintCache.getOrElseUpdate(schema, {
@@ -122,16 +121,16 @@ private[serializer] class GenericAvroSerializer[D <: GenericContainer]
     }
 
     writerCache.getOrElseUpdate(schema, GenericData.get.createDatumWriter(schema))
-      .asInstanceOf[DatumWriter[D]]
+      .asInstanceOf[DatumWriter[R]]
       .write(datum, encoder)
     encoder.flush()
   }
 
   /**
-   * Deserializes generic containers into their in-memory form. There is internal
+   * Deserializes generic records into their in-memory form. There is internal
    * state to keep a cache of already seen schemas and datum readers.
    */
-  def deserializeDatum(input: KryoInput): D = {
+  def deserializeDatum(input: KryoInput): GenericRecord = {
     val schema = {
       if (input.readBoolean()) {
         val fingerprint = input.readLong()
@@ -152,13 +151,13 @@ private[serializer] class GenericAvroSerializer[D <: GenericContainer]
     }
     val decoder = DecoderFactory.get.directBinaryDecoder(input, null)
     readerCache.getOrElseUpdate(schema, GenericData.get.createDatumReader(schema))
-      .asInstanceOf[DatumReader[D]]
-      .read(null.asInstanceOf[D], decoder)
+      .asInstanceOf[DatumReader[GenericRecord]]
+      .read(null, decoder)
   }
 
-  override def write(kryo: Kryo, output: KryoOutput, datum: D): Unit =
+  override def write(kryo: Kryo, output: KryoOutput, datum: GenericRecord): Unit =
     serializeDatum(datum, output)
 
-  override def read(kryo: Kryo, input: KryoInput, datumClass: Class[D]): D =
+  override def read(kryo: Kryo, input: KryoInput, datumClass: Class[GenericRecord]): GenericRecord =
     deserializeDatum(input)
 }

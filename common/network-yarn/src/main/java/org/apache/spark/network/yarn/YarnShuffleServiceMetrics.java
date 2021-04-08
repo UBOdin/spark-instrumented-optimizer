@@ -32,11 +32,9 @@ import org.apache.hadoop.metrics2.MetricsSource;
  */
 class YarnShuffleServiceMetrics implements MetricsSource {
 
-  private final String metricsNamespace;
   private final MetricSet metricSet;
 
-  YarnShuffleServiceMetrics(String metricsNamespace, MetricSet metricSet) {
-    this.metricsNamespace = metricsNamespace;
+  YarnShuffleServiceMetrics(MetricSet metricSet) {
     this.metricSet = metricSet;
   }
 
@@ -48,7 +46,7 @@ class YarnShuffleServiceMetrics implements MetricsSource {
    */
   @Override
   public void getMetrics(MetricsCollector collector, boolean all) {
-    MetricsRecordBuilder metricsRecordBuilder = collector.addRecord(metricsNamespace);
+    MetricsRecordBuilder metricsRecordBuilder = collector.addRecord("sparkShuffleService");
 
     for (Map.Entry<String, Metric> entry : metricSet.getMetrics().entrySet()) {
       collectMetric(metricsRecordBuilder, entry.getKey(), entry.getValue());

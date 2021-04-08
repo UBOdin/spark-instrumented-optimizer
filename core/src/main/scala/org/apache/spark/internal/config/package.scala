@@ -680,16 +680,6 @@ package object config {
   private[spark] val SHUFFLE_SERVICE_PORT =
     ConfigBuilder("spark.shuffle.service.port").version("1.2.0").intConf.createWithDefault(7337)
 
-  private[spark] val SHUFFLE_SERVICE_NAME =
-    ConfigBuilder("spark.shuffle.service.name")
-      .doc("The configured name of the Spark shuffle service the client should communicate with. " +
-        "This must match the name used to configure the Shuffle within the YARN NodeManager " +
-        "configuration (`yarn.nodemanager.aux-services`). Only takes effect when " +
-        s"$SHUFFLE_SERVICE_ENABLED is set to true.")
-      .version("3.2.0")
-      .stringConf
-      .createWithDefault("spark_shuffle")
-
   private[spark] val KEYTAB = ConfigBuilder("spark.kerberos.keytab")
     .doc("Location of user's keytab.")
     .version("3.0.0")
@@ -725,18 +715,6 @@ package object config {
     .stringConf
     .toSequence
     .createWithDefault(Nil)
-
-  private[spark] val YARN_KERBEROS_FILESYSTEM_RENEWAL_EXCLUDE =
-    ConfigBuilder("spark.yarn.kerberos.renewal.excludeHadoopFileSystems")
-      .doc("The list of Hadoop filesystem URLs whose hosts will be excluded from " +
-        "delegation token renewal at resource scheduler. Currently this is known to " +
-        "work under YARN, so YARN Resource Manager won't renew tokens for the application. " +
-        "Note that as resource scheduler does not renew token, so any application running " +
-        "longer than the original token expiration that tries to use that token will likely fail.")
-      .version("3.2.0")
-      .stringConf
-      .toSequence
-      .createWithDefault(Nil)
 
   private[spark] val EXECUTOR_INSTANCES = ConfigBuilder("spark.executor.instances")
     .version("1.0.0")
@@ -1059,7 +1037,7 @@ package object config {
       .doc("When true, HadoopRDD/NewHadoopRDD will not create partitions for empty input splits.")
       .version("2.3.0")
       .booleanConf
-      .createWithDefault(true)
+      .createWithDefault(false)
 
   private[spark] val SECRET_REDACTION_PATTERN =
     ConfigBuilder("spark.redaction.regex")
@@ -1069,7 +1047,7 @@ package object config {
         "like YARN and event logs.")
       .version("2.1.2")
       .regexConf
-      .createWithDefault("(?i)secret|password|token|access[.]key".r)
+      .createWithDefault("(?i)secret|password|token".r)
 
   private[spark] val STRING_REDACTION_PATTERN =
     ConfigBuilder("spark.redaction.string.regex")

@@ -271,6 +271,8 @@ object SparkBuild extends PomBuild {
       // Google Mirror of Maven Central, placed first so that it's used instead of flaky Maven Central.
       // See https://storage-download.googleapis.com/maven-central/index.html for more info.
       "gcs-maven-central-mirror" at "https://maven-central.storage-download.googleapis.com/maven2/",
+      "Open Source Geospatial Foundation Repository" at "https://repo.osgeo.org/repository/release/",
+      "MimirDB" at "https://maven.mimirdb.info/",
       DefaultMavenRepository,
       Resolver.mavenLocal,
       Resolver.file("ivyLocal", file(Path.userHome.absolutePath + "/.ivy2/local"))(Resolver.ivyStylePatterns)
@@ -658,7 +660,7 @@ object DependencyOverrides {
     dependencyOverrides += "com.google.guava" % "guava" % guavaVersion,
     dependencyOverrides += "xerces" % "xercesImpl" % "2.12.0",
     dependencyOverrides += "jline" % "jline" % "2.14.6",
-    dependencyOverrides += "org.apache.avro" % "avro" % "1.10.2")
+    dependencyOverrides += "org.apache.avro" % "avro" % "1.10.1")
 }
 
 /**

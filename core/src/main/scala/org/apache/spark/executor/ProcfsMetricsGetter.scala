@@ -101,8 +101,7 @@ private[spark] class ProcfsMetricsGetter(procfsDir: String = "/proc/") extends L
     }
   }
 
-  // Exposed for testing
-  private[executor] def computeProcessTree(): Set[Int] = {
+  private def computeProcessTree(): Set[Int] = {
     if (!isAvailable || testing) {
       return Set()
     }
@@ -160,8 +159,7 @@ private[spark] class ProcfsMetricsGetter(procfsDir: String = "/proc/") extends L
     }
   }
 
-  // Exposed for testing
-  private[executor] def addProcfsMetricsFromOneProcess(
+  def addProcfsMetricsFromOneProcess(
       allMetrics: ProcfsMetrics,
       pid: Int): ProcfsMetrics = {
 
@@ -201,7 +199,7 @@ private[spark] class ProcfsMetricsGetter(procfsDir: String = "/proc/") extends L
       case f: IOException =>
         logWarning("There was a problem with reading" +
           " the stat file of the process. ", f)
-        throw f
+        ProcfsMetrics(0, 0, 0, 0, 0, 0)
     }
   }
 
@@ -212,16 +210,11 @@ private[spark] class ProcfsMetricsGetter(procfsDir: String = "/proc/") extends L
     val pids = computeProcessTree
     var allMetrics = ProcfsMetrics(0, 0, 0, 0, 0, 0)
     for (p <- pids) {
-      try {
-        allMetrics = addProcfsMetricsFromOneProcess(allMetrics, p)
-        // if we had an error getting any of the metrics, we don't want to
-        // report partial metrics, as that would be misleading.
-        if (!isAvailable) {
-          return ProcfsMetrics(0, 0, 0, 0, 0, 0)
-        }
-      } catch {
-        case _: IOException =>
-          return ProcfsMetrics(0, 0, 0, 0, 0, 0)
+      allMetrics = addProcfsMetricsFromOneProcess(allMetrics, p)
+      // if we had an error getting any of the metrics, we don't want to report partial metrics, as
+      // that would be misleading.
+      if (!isAvailable) {
+        return ProcfsMetrics(0, 0, 0, 0, 0, 0)
       }
     }
     allMetrics

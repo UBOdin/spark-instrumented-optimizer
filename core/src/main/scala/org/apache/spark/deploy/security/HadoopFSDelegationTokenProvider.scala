@@ -48,12 +48,7 @@ private[deploy] class HadoopFSDelegationTokenProvider
       creds: Credentials): Option[Long] = {
     try {
       val fileSystems = HadoopFSDelegationTokenProvider.hadoopFSsToAccess(sparkConf, hadoopConf)
-      // The hosts on which the file systems to be excluded from token renewal
-      val fsToExclude = sparkConf.get(YARN_KERBEROS_FILESYSTEM_RENEWAL_EXCLUDE)
-        .map(new Path(_).getFileSystem(hadoopConf).getUri.getHost)
-        .toSet
-      val fetchCreds = fetchDelegationTokens(getTokenRenewer(hadoopConf), fileSystems, creds,
-        fsToExclude)
+      val fetchCreds = fetchDelegationTokens(getTokenRenewer(hadoopConf), fileSystems, creds)
 
       // Get the token renewal interval if it is not set. It will only be called once.
       if (tokenRenewalInterval == null) {
@@ -104,18 +99,11 @@ private[deploy] class HadoopFSDelegationTokenProvider
   private def fetchDelegationTokens(
       renewer: String,
       filesystems: Set[FileSystem],
-      creds: Credentials,
-      fsToExclude: Set[String]): Credentials = {
+      creds: Credentials): Credentials = {
 
     filesystems.foreach { fs =>
-      if (fsToExclude.contains(fs.getUri.getHost)) {
-        // YARN RM skips renewing token with empty renewer
-        logInfo(s"getting token for: $fs with empty renewer to skip renewal")
-        fs.addDelegationTokens("", creds)
-      } else {
-        logInfo(s"getting token for: $fs with renewer $renewer")
-        fs.addDelegationTokens(renewer, creds)
-      }
+      logInfo(s"getting token for: $fs with renewer $renewer")
+      fs.addDelegationTokens(renewer, creds)
     }
 
     creds
@@ -131,7 +119,7 @@ private[deploy] class HadoopFSDelegationTokenProvider
     val renewer = UserGroupInformation.getCurrentUser().getUserName()
 
     val creds = new Credentials()
-    fetchDelegationTokens(renewer, filesystems, creds, Set.empty)
+    fetchDelegationTokens(renewer, filesystems, creds)
 
     val renewIntervals = creds.getAllTokens.asScala.filter {
       _.decodeIdentifier().isInstanceOf[AbstractDelegationTokenIdentifier]
