@@ -19,5 +19,5 @@ To generate runs and corresponding .sh from get_sql_script.py
 To plot graphs using tpch_plotting.py
 1. Change the input file path to the folder that has the result of running the tpch queries on spark. The default results live in "tpch_output/tpch_output_".
 2. Change the name of the output files. The default name is "/output_"
-3. Chnage the type of output file. The default type of the ouputfile is ".txt"
+3. Change the type of output file. The default type of the ouputfile is ".txt"
 2. Run using python interpreter
