@@ -5,7 +5,9 @@ import pandas as pd
 import matplotlib
 import matplotlib.cm
 
-
+input_folder = "tpch_output/tpch_output_"
+output_file_name = "/output_"
+output_file_type = ".txt"
 
 search_line = "DARSHANA: Explain : Total Time in Search Phase that has an exec"
 noExecSearchLine = "DARSHANA: Explain : Total Time in Search Phase that doesn't have an exec"
@@ -35,13 +37,13 @@ for i in folders:
 	Total_Ast_Size_list = []
 	file_names = []
 	Total_Execution_list = []
-	for path in pathlib.Path("./tpch_output_"+i).iterdir():
+	for path in pathlib.Path("./"+input_folder+i).iterdir():
 		if path.is_file():
 			current_file = open(path, "r")
 			file_name = current_file.name
 			# print(file_name)
-			file_name = file_name.replace("tpch_output_"+i+"/output_","")
-			file_name = file_name.replace(".txt","")
+			file_name = file_name.replace(input_folder+i+output_file_name,"")
+			file_name = file_name.replace(output_file_type,"")
 			print(file_name)
 			file_names.append(int(file_name))
 			lines = current_file.readlines()
