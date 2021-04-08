@@ -1,0 +1,24 @@
+Spark context Web UI available at http://mjolnir.cse.buffalo.edu:4040
+Spark context available as 'sc' (master = local[*], app id = local-1616704617254).
+Spark session available as 'spark'.
+Running SQL Query 2 
+DARSHANA: Using the custom explain without println
+DARSHANA: Explain : Analyzed Plan Size : 17
+DARSHANA: Explain : Optimized Plan Size : 45
+------------------------------
+DARSHANA: Explain : Total Time in Search Phase that has an exec 640033135 ns or 0.640033135 sec
+DARSHANA: Explain : Total Time in Search Phase that doesn't have an exec 232087 ns or 2.32087E-4 sec
+DARSHANA: Explain : Total Time in Search Phase 640265222 ns or 0.640265222 sec
+------------------------------
+DARSHANA: Explain : Total Time in Rewrite Phase that has an exec and can be bucketed 563265543 ns or 0.563265543 sec
+DARSHANA: Explain : Total Time in Rewrite Phase Effective 257989727 ns or 0.257989727 sec
+DARSHANA: Explain : Total Time in Rewrite Phase InEffective 305275816 ns or 0.305275816 sec
+DARSHANA: Explain : Total Time in Rewrite Phase that doesn't have an exec 7500840 ns or 0.00750084 sec
+DARSHANA: Explain : Total Time in Rewrite Phase 570766383 ns or 0.570766383 sec
+------------------------------
+DARSHANA: Explain : Total Time in Execution Phase 710390329 ns or 0.710390329 sec
+------------------------------
+DARSHANA: Explain : Fraction Time spent in Search(Total Time in Search/(Total Time in Search + Total Time in Rewrite)) 0.52869406492492 or percentage 52.869406492492
+DARSHANA: Explain : Fraction Time spent in Search(Total Time in Search/(Total Time in Search + Total Time in Effective and InEffective Rewrite)) 0.5319890779858877 or percentage 53.19890779858877
+------------------------------
+DARSHANA: Explain : TotalRunTime (Execution + Search + Rewrite) is 1.921421934 sec

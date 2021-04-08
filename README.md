@@ -19,3 +19,5 @@ This README file only contains basic setup instructions.
 Compile with SBT the instrumented spark using command ./build/sbt package.
 
 All graphing and testing scripts live in spark_scripts/
+
+All tpch results and scripts live in tpch/
