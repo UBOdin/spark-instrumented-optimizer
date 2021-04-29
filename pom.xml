@@ -343,7 +343,7 @@
       <version>1.0.0</version>
     </dependency>
 
-    <!-- DARSHANA: depedencies and exclusions for mimir -->
+    <!-- DARSHANA: depedencies and exclusions for mimir
     <dependency>
       <groupId>org.mimirdb</groupId>
       <artifactId>mimir-api_2.12</artifactId>
@@ -366,7 +366,7 @@
           <artifactId>hadoop-client</artifactId>
         </exclusion>
       </exclusions>
-    </dependency>
+    </dependency> -->
     
     <!--
          This is needed by the scalatest plugin, and so is declared here to be available in
