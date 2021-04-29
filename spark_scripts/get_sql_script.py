@@ -10,11 +10,11 @@ import os
 # scala_file_path
 # shell_file
 
-table_path = "../tpch/tpch_table/"
+table_path = "./tpch/tpch_table/"
 tpch_queries_path = "../tpch/tpch_queries"
 tpch_spark_queries_path = "../tpch/tpch_spark/spark_command_"
-output_command = ".scala > ../tpch/tpch_output/tpch_output_5/output_"
-scala_file_path = "../tpch/tpch_spark/"
+output_command = ".scala > ./tpch/tpch_output/tpch_output_5/output_"
+scala_file_path = "./tpch/tpch_spark/"
 shell_file = open(r"../tpch/tpch_spark_shell_script_5.sh","w")
 
 # Generate all create table commands from schema.sql.
