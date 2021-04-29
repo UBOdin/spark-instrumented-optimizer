@@ -166,13 +166,18 @@ CB_color_cycle = ['#377eb8', '#ff7f00', '#4daf4a',
 print("Completed Sort")
 execution = vsorted_ftesei_ns[:,2]/1000000000.0
 search = vsorted_ftesei_ns[:,3]/1000000000.0 # to convet to sec from ns
-print(search)
 ineffective = vsorted_ftesei_ns[:,5]/1000000000.0
 effective = vsorted_ftesei_ns[:,4]/1000000000.0
 # plt.bar(x_axis,search,label='Search',color = CB_color_cycle[0])
 # plt.bar(x_axis,ineffective,label='Ineffective Rewrites',color = CB_color_cycle[5],bottom = search)
 # plt.bar(x_axis,effective,label='Effective Rewrites',color = CB_color_cycle[1],bottom = search + ineffective)
 # plt.bar(x_axis,execution,label='Fixpoint Loop',color = CB_color_cycle[8],bottom = search + ineffective + effective)
+
+print("Percentage in Search")
+print(((vsorted_ftesei_ns[:,3])/(vsorted_ftesei_ns[:,2] + vsorted_ftesei_ns[:,3] + vsorted_ftesei_ns[:,4] +vsorted_ftesei_ns[:,5]))*100)
+print("Percentage in Fixed Point")
+print(((vsorted_ftesei_ns[:,2])/(vsorted_ftesei_ns[:,2] + vsorted_ftesei_ns[:,3] + vsorted_ftesei_ns[:,4] +vsorted_ftesei_ns[:,5]))*100)
+
 plt.figure(figsize=(10, 6))
 plt.rcParams.update({'font.size': 18})
 plt.bar(x_axis,search,label='Search',color = '#00263E')
