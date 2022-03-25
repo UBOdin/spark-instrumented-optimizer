@@ -18,6 +18,7 @@
 package org.apache.spark.sql.catalyst.rules
 
 import org.apache.spark.internal.Logging
+import org.apache.spark.sql.catalyst.CustomLogger
 import org.apache.spark.sql.catalyst.QueryPlanningTracker
 import org.apache.spark.sql.catalyst.trees.TreeNode
 import org.apache.spark.sql.catalyst.util.DateTimeConstants.NANOS_PER_SECOND
@@ -185,6 +186,7 @@ abstract class RuleExecutor[TreeType <: TreeNode[_]] extends Logging {
    * using the defined execution strategy. Within each batch, rules are also executed serially.
    */
   def execute(plan: TreeType): TreeType = {
+    CustomLogger.logExecutionTime("stopTheClock : Execution called.") {
     var curPlan = plan
     val queryExecutionMetrics = RuleExecutor.queryExecutionMeter
     val planChangeLogger = new PlanChangeLogger[TreeType]()
@@ -207,12 +209,16 @@ abstract class RuleExecutor[TreeType <: TreeNode[_]] extends Logging {
       while (continue) {
         curPlan = batch.rules.foldLeft(curPlan) {
           case (plan, rule) =>
+            CustomLogger.pushCounterStacks(rule.ruleName)
             val startTime = System.nanoTime()
             val result = rule(plan)
             val runTime = System.nanoTime() - startTime
             val effective = !result.fastEquals(plan)
-
+            CustomLogger.popCounterStacks(effective, rule.ruleName)
             if (effective) {
+              // scalastyle:off
+              CustomLogger.logEffectiveRulesAsSet(rule.ruleName)
+              // scalastyle:on
               queryExecutionMetrics.incNumEffectiveExecution(rule.ruleName)
               queryExecutionMetrics.incTimeEffectiveExecutionBy(rule.ruleName, runTime)
               planChangeLogger.logRule(rule.ruleName, plan, result)
@@ -269,5 +275,5 @@ abstract class RuleExecutor[TreeType <: TreeNode[_]] extends Logging {
     planChangeLogger.logMetrics(RuleExecutor.getCurrentMetrics() - beforeMetrics)
 
     curPlan
-  }
+  }}
 }

@@ -1,3 +1,30 @@
+# Instrumented Spark Query Compiler Optimizer
+
+This instrumentation is designed to capture timing data of specific processes that the Spark query compiler optimizer goes through.
+These processes are as follows:
+
+* Search: traversing an AST for potential rewrites
+* Effective re-writes: successfully matching a rule, and re-writing
+* Ineffective re-writes: unsuccessfully matching any rule, doing nothing 
+* Fixed point loop: outer loop of the optimizer
+
+## Setup
+
+This build was built and tested with Scala `2.13`, so you will want to switch to it before building.
+From the root of the project directory, as per the spark documentation, you may switch Scala versions like so:
+```
+./dev/change-scala-version.sh 2.13
+```
+
+And then enable said profile for either Maven or sbt:
+```
+# For Maven
+./build/mvn -Pscala-2.13 compile
+
+# For sbt
+./build/sbt -Pscala-2.13 compile
+```
+
 # Apache Spark
 
 Spark is a unified analytics engine for large-scale data processing. It provides

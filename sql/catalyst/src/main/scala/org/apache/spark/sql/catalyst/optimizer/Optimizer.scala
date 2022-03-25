@@ -19,6 +19,7 @@ package org.apache.spark.sql.catalyst.optimizer
 
 import scala.collection.mutable
 
+import org.apache.spark.sql.catalyst.CustomLogger
 import org.apache.spark.sql.catalyst.analysis._
 import org.apache.spark.sql.catalyst.catalog.{InMemoryCatalog, SessionCatalog}
 import org.apache.spark.sql.catalyst.expressions._
@@ -298,15 +299,21 @@ abstract class Optimizer(catalogManager: CatalogManager)
         case other => other
       }
     }
-    def apply(plan: LogicalPlan): LogicalPlan = plan.transformAllExpressionsWithPruning(
-      _.containsPattern(PLAN_EXPRESSION), ruleId) {
-      case s: SubqueryExpression =>
-        val Subquery(newPlan, _) = Optimizer.this.execute(Subquery.fromExpression(s))
-        // At this point we have an optimized subquery plan that we are going to attach
-        // to this subquery expression. Here we can safely remove any top level sort
-        // in the plan as tuples produced by a subquery are un-ordered.
-        s.withNewPlan(removeTopLevelSort(newPlan))
-    }
+    def apply(plan: LogicalPlan): LogicalPlan =
+      CustomLogger.logTransformTime("stopTheClock : Transform OptimizeSubqueries")
+      {
+        plan.transformAllExpressionsWithPruning(_.containsPattern(PLAN_EXPRESSION), ruleId) {
+          case s: SubqueryExpression =>
+            CustomLogger.logMatchTime("stopTheClock : Match OptimizeSubqueries", true)
+            {
+              val Subquery(newPlan, _) = Optimizer.this.execute(Subquery.fromExpression(s))
+              // At this point we have an optimized subquery plan that we are going to attach
+              // to this subquery expression. Here we can safely remove any top level sort
+              // in the plan as tuples produced by a subquery are un-ordered.
+              s.withNewPlan(removeTopLevelSort(newPlan))
+            }
+        }
+      }
   }
 
   /**
@@ -409,10 +416,18 @@ abstract class Optimizer(catalogManager: CatalogManager)
  * This rule should be applied before RewriteDistinctAggregates.
  */
 object EliminateDistinct extends Rule[LogicalPlan] {
-  override def apply(plan: LogicalPlan): LogicalPlan = plan transformExpressions  {
-    case ae: AggregateExpression if ae.isDistinct && isDuplicateAgnostic(ae.aggregateFunction) =>
-      ae.copy(isDistinct = false)
-  }
+  override def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("stopTheClock : Transform EliminateDistinct")
+    {
+      plan transformExpressions  {
+        case ae: AggregateExpression if
+        ae.isDistinct && isDuplicateAgnostic(ae.aggregateFunction) =>
+          CustomLogger.logMatchTime("stopTheClock : Match EliminateDistinct", true)
+          {
+            ae.copy(isDistinct = false)
+          }
+      }
+    }
 
   def isDuplicateAgnostic(af: AggregateFunction): Boolean = af match {
     case _: Max => true
@@ -429,21 +444,34 @@ object EliminateDistinct extends Rule[LogicalPlan] {
  * This rule should be applied before RewriteDistinctAggregates.
  */
 object EliminateAggregateFilter extends Rule[LogicalPlan] {
-  override def apply(plan: LogicalPlan): LogicalPlan = plan.transformExpressionsWithPruning(
-    _.containsAllPatterns(TRUE_OR_FALSE_LITERAL), ruleId)  {
-    case ae @ AggregateExpression(_, _, _, Some(Literal.TrueLiteral), _) =>
-      ae.copy(filter = None)
-    case AggregateExpression(af: DeclarativeAggregate, _, _, Some(Literal.FalseLiteral), _) =>
-      val initialProject = SafeProjection.create(af.initialValues)
-      val evalProject = SafeProjection.create(af.evaluateExpression :: Nil, af.aggBufferAttributes)
-      val initialBuffer = initialProject(EmptyRow)
-      val internalRow = evalProject(initialBuffer)
-      Literal.create(internalRow.get(0, af.dataType), af.dataType)
-    case AggregateExpression(af: ImperativeAggregate, _, _, Some(Literal.FalseLiteral), _) =>
-      val buffer = new SpecificInternalRow(af.aggBufferAttributes.map(_.dataType))
-      af.initialize(buffer)
-      Literal.create(af.eval(buffer), af.dataType)
-  }
+  override def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("stopTheClock : Transform EliminateAggregateFilter")
+    {
+      plan.transformExpressionsWithPruning(_.containsAllPatterns(TRUE_OR_FALSE_LITERAL), ruleId) {
+      case ae @ AggregateExpression(_, _, _, Some(Literal.TrueLiteral), _) =>
+        CustomLogger.logMatchTime("stopTheClock : Match EliminateAggregateFilter", true)
+        {
+          ae.copy(filter = None)
+        }
+      case AggregateExpression(af: DeclarativeAggregate, _, _, Some(Literal.FalseLiteral), _) =>
+        CustomLogger.logMatchTime("stopTheClock : Match EliminateAggregateFilter", true)
+        {
+          val initialProject = SafeProjection.create(af.initialValues)
+          val evalProject = SafeProjection.create(
+            af.evaluateExpression :: Nil, af.aggBufferAttributes)
+          val initialBuffer = initialProject(EmptyRow)
+          val internalRow = evalProject(initialBuffer)
+          Literal.create(internalRow.get(0, af.dataType), af.dataType)
+        }
+      case AggregateExpression(af: ImperativeAggregate, _, _, Some(Literal.FalseLiteral), _) =>
+        CustomLogger.logMatchTime("stopTheClock : Match EliminateAggregateFilter", true)
+        {
+          val buffer = new SpecificInternalRow(af.aggBufferAttributes.map(_.dataType))
+          af.initialize(buffer)
+          Literal.create(af.eval(buffer), af.dataType)
+        }
+      }
+    }
 }
 
 /**
@@ -505,56 +533,71 @@ object RemoveRedundantAliases extends Rule[LogicalPlan] {
       // We want to keep the same output attributes for subqueries. This means we cannot remove
       // the aliases that produce these attributes
       case Subquery(child, correlated) =>
-        Subquery(removeRedundantAliases(child, excluded ++ child.outputSet), correlated)
+        CustomLogger.logMatchTime(
+          "stopTheClock : Match 1 (case Subquery) RemoveRedundantAliases", true)
+        {
+          Subquery(removeRedundantAliases(child, excluded ++ child.outputSet), correlated)
+        }
 
       // A join has to be treated differently, because the left and the right side of the join are
       // not allowed to use the same attributes. We use an exclude list to prevent us from creating
       // a situation in which this happens; the rule will only remove an alias if its child
       // attribute is not on the black list.
       case Join(left, right, joinType, condition, hint) =>
-        val newLeft = removeRedundantAliases(left, excluded ++ right.outputSet)
-        val newRight = removeRedundantAliases(right, excluded ++ newLeft.outputSet)
-        val mapping = AttributeMap(
-          createAttributeMapping(left, newLeft) ++
-          createAttributeMapping(right, newRight))
-        val newCondition = condition.map(_.transform {
-          case a: Attribute => mapping.getOrElse(a, a)
-        })
-        Join(newLeft, newRight, joinType, newCondition, hint)
+        CustomLogger. logMatchTime(
+          "stopTheClock : Match 2 (case Join) RemoveRedundantAliases", true)
+        {
+          val newLeft = removeRedundantAliases(left, excluded ++ right.outputSet)
+          val newRight = removeRedundantAliases(right, excluded ++ newLeft.outputSet)
+          val mapping = AttributeMap(
+            createAttributeMapping(left, newLeft) ++
+            createAttributeMapping(right, newRight))
+          val newCondition = condition.map(_.transform {
+            case a: Attribute => mapping.getOrElse(a, a)
+          })
+          Join(newLeft, newRight, joinType, newCondition, hint)
+        }
 
       case _ =>
         // Remove redundant aliases in the subtree(s).
-        val currentNextAttrPairs = mutable.Buffer.empty[(Attribute, Attribute)]
-        val newNode = plan.mapChildren { child =>
-          val newChild = removeRedundantAliases(child, excluded)
-          currentNextAttrPairs ++= createAttributeMapping(child, newChild)
-          newChild
-        }
+        CustomLogger.logMatchTime("stopTheClock : Match 3 (case _) RemoveRedundantAliases", true)
+        {
+          val currentNextAttrPairs = mutable.Buffer.empty[(Attribute, Attribute)]
+          val newNode = plan.mapChildren { child =>
+            val newChild = removeRedundantAliases(child, excluded)
+            currentNextAttrPairs ++= createAttributeMapping(child, newChild)
+            newChild
+          }
 
-        // Create the attribute mapping. Note that the currentNextAttrPairs can contain duplicate
-        // keys in case of Union (this is caused by the PushProjectionThroughUnion rule); in this
-        // case we use the first mapping (which should be provided by the first child).
-        val mapping = AttributeMap(currentNextAttrPairs.toSeq)
+          // Create the attribute mapping. Note that the currentNextAttrPairs can contain duplicate
+          // keys in case of Union (this is caused by the PushProjectionThroughUnion rule); in this
+          // case we use the first mapping (which should be provided by the first child).
+          val mapping = AttributeMap(currentNextAttrPairs.toSeq)
 
-        // Create a an expression cleaning function for nodes that can actually produce redundant
-        // aliases, use identity otherwise.
-        val clean: Expression => Expression = plan match {
-          case _: Project => removeRedundantAlias(_, excluded)
-          case _: Aggregate => removeRedundantAlias(_, excluded)
-          case _: Window => removeRedundantAlias(_, excluded)
-          case _ => identity[Expression]
-        }
+          // Create a an expression cleaning function for nodes that can actually produce redundant
+          // aliases, use identity otherwise.
+          val clean: Expression => Expression = plan match {
+            case _: Project => removeRedundantAlias(_, excluded)
+            case _: Aggregate => removeRedundantAlias(_, excluded)
+            case _: Window => removeRedundantAlias(_, excluded)
+            case _ => identity[Expression]
+          }
 
-        // Transform the expressions.
-        newNode.mapExpressions { expr =>
-          clean(expr.transform {
-            case a: Attribute => mapping.get(a).map(_.withName(a.name)).getOrElse(a)
-          })
+          // Transform the expressions.
+          newNode.mapExpressions { expr =>
+            clean(expr.transform {
+              case a: Attribute => mapping.get(a).map(_.withName(a.name)).getOrElse(a)
+            })
+          }
         }
     }
   }
 
-  def apply(plan: LogicalPlan): LogicalPlan = removeRedundantAliases(plan, AttributeSet.empty)
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("stopTheClock : Transform RemoveRedundantAliases")
+    {
+      removeRedundantAliases(plan, AttributeSet.empty)
+    }
 }
 
 /**
@@ -562,28 +605,39 @@ object RemoveRedundantAliases extends Rule[LogicalPlan] {
  */
 object RemoveNoopOperators extends Rule[LogicalPlan] {
 
-  def apply(plan: LogicalPlan): LogicalPlan = plan.transformUpWithPruning(
-    _.containsAnyPattern(PROJECT, WINDOW), ruleId) {
-    // Eliminate no-op Projects
-    case p @ Project(projectList, child) if child.sameOutput(p) =>
-      val newChild = child match {
-        case p: Project =>
-          p.copy(projectList = restoreOriginalOutputNames(p.projectList, projectList.map(_.name)))
-        case agg: Aggregate =>
-          agg.copy(aggregateExpressions =
-            restoreOriginalOutputNames(agg.aggregateExpressions, projectList.map(_.name)))
-        case _ =>
-          child
-      }
-      if (newChild.output.zip(projectList).forall { case (a1, a2) => a1.name == a2.name }) {
-        newChild
-      } else {
-        p
-      }
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("stopTheClock : Transform RemoveNoopOperators")
+    {
+      plan.transformUpWithPruning(_.containsAnyPattern(PROJECT, WINDOW), ruleId) {
+        // Eliminate no-op Projects
+        case p @ Project(projectList, child) if child.sameOutput(p) =>
+          CustomLogger.logMatchTime("stopTheClock : Match 1 (case p) RemoveNoopOperators", true)
+          {
+            val newChild = child match {
+              case p: Project =>
+                p.copy(projectList = restoreOriginalOutputNames(
+                  p.projectList, projectList.map(_.name)))
+              case agg: Aggregate =>
+                agg.copy(aggregateExpressions = restoreOriginalOutputNames(
+                  agg.aggregateExpressions, projectList.map(_.name)))
+              case _ =>
+                child
+            }
+            if (newChild.output.zip(projectList).forall { case (a1, a2) => a1.name == a2.name }) {
+              newChild
+            } else {
+            p
+            }
+          }
 
-    // Eliminate no-op Window
-    case w: Window if w.windowExpressions.isEmpty => w.child
-  }
+      // Eliminate no-op Window
+      case w: Window if w.windowExpressions.isEmpty =>
+        CustomLogger.logMatchTime("stopTheClock : Match 2 (case w) RemoveNoopOperators", true)
+        {
+          w.child
+        }
+      }
+    }
 }
 
 /**
@@ -629,13 +683,23 @@ object RemoveNoopUnion extends Rule[LogicalPlan] {
     }
   }
 
-  def apply(plan: LogicalPlan): LogicalPlan = plan.transformUpWithPruning(
-    _.containsAllPatterns(DISTINCT_LIKE, UNION)) {
-    case d @ Distinct(u: Union) =>
-      d.withNewChildren(Seq(simplifyUnion(u)))
-    case d @ Deduplicate(_, u: Union) =>
-      d.withNewChildren(Seq(simplifyUnion(u)))
-  }
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("stopTheClock : Trandform RemoveNoopUnion")
+    {
+      plan.transformUpWithPruning(
+        _.containsAllPatterns(DISTINCT_LIKE, UNION)) {
+      case d @ Distinct(u: Union) =>
+      CustomLogger.logMatchTime("stopTheClock : Match RemoveNoopUnion", true)
+      {
+        d.withNewChildren(Seq(simplifyUnion(u)))
+      }
+      case d @ Deduplicate(_, u: Union) =>
+        CustomLogger.logMatchTime("stopTheClock : ", true)
+        {
+          d.withNewChildren(Seq(simplifyUnion(u)))
+        }
+      }
+    }
 }
 
 /**
@@ -681,35 +745,47 @@ object LimitPushDown extends Rule[LogicalPlan] {
     }
   }
 
-  def apply(plan: LogicalPlan): LogicalPlan = plan.transformWithPruning(
-    _.containsPattern(LIMIT), ruleId) {
-    // Adding extra Limits below UNION ALL for children which are not Limit or do not have Limit
-    // descendants whose maxRow is larger. This heuristic is valid assuming there does not exist any
-    // Limit push-down rule that is unable to infer the value of maxRows.
-    // Note: right now Union means UNION ALL, which does not de-duplicate rows, so it is safe to
-    // pushdown Limit through it. Once we add UNION DISTINCT, however, we will not be able to
-    // pushdown Limit.
-    case LocalLimit(exp, u: Union) =>
-      LocalLimit(exp, u.copy(children = u.children.map(maybePushLocalLimit(exp, _))))
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("stopTheClock : Transform LimitPushDown")
+    {
+      plan.transformWithPruning(_.containsPattern(LIMIT), ruleId) {
+      // Adding extra Limits below UNION ALL for children which are not Limit or do not have Limit
+      // descendants whose maxRow is larger. This heuristic is valid assuming there does not exist
+      // any Limit push-down rule that is unable to infer the value of maxRows.
+      // Note: right now Union means UNION ALL, which does not de-duplicate rows, so it is safe to
+      // pushdown Limit through it. Once we add UNION DISTINCT, however, we will not be able to
+      // pushdown Limit.
+      case LocalLimit(exp, u: Union) =>
+        CustomLogger.logMatchTime("stopTheClock : Match LimitPushDown", true)
+        {
+          LocalLimit(exp, u.copy(children = u.children.map(maybePushLocalLimit(exp, _))))
+        }
 
-    // Add extra limits below JOIN:
-    // 1. For LEFT OUTER and RIGHT OUTER JOIN, we push limits to the left and right sides,
-    //    respectively.
-    // 2. For INNER and CROSS JOIN, we push limits to both the left and right sides if join
-    //    condition is empty.
-    // 3. For LEFT SEMI and LEFT ANTI JOIN, we push limits to the left side if join condition
-    //    is empty.
-    // It's not safe to push limits below FULL OUTER JOIN in the general case without a more
-    // invasive rewrite. We also need to ensure that this limit pushdown rule will not eventually
-    // introduce limits on both sides if it is applied multiple times. Therefore:
-    //   - If one side is already limited, stack another limit on top if the new limit is smaller.
-    //     The redundant limit will be collapsed by the CombineLimits rule.
-    case LocalLimit(exp, join: Join) =>
-      LocalLimit(exp, pushLocalLimitThroughJoin(exp, join))
-    // There is a Project between LocalLimit and Join if they do not have the same output.
-    case LocalLimit(exp, project @ Project(_, join: Join)) =>
-      LocalLimit(exp, project.copy(child = pushLocalLimitThroughJoin(exp, join)))
-  }
+      // Add extra limits below JOIN:
+      // 1. For LEFT OUTER and RIGHT OUTER JOIN, we push limits to the left and right sides,
+      //    respectively.
+      // 2. For INNER and CROSS JOIN, we push limits to both the left and right sides if join
+      //    condition is empty.
+      // 3. For LEFT SEMI and LEFT ANTI JOIN, we push limits to the left side if join condition
+      //    is empty.
+      // It's not safe to push limits below FULL OUTER JOIN in the general case without a more
+      // invasive rewrite. We also need to ensure that this limit pushdown rule will not eventually
+      // introduce limits on both sides if it is applied multiple times. Therefore:
+      //   - If one side is already limited, stack another limit on top if the new limit is smaller.
+      //     The redundant limit will be collapsed by the CombineLimits rule.
+      case LocalLimit(exp, join: Join) =>
+        CustomLogger.logMatchTime("stopTheClock : Match LimitPushDown", true)
+        {
+          LocalLimit(exp, pushLocalLimitThroughJoin(exp, join))
+        }
+      // There is a Project between LocalLimit and Join if they do not have the same output.
+      case LocalLimit(exp, project @ Project(_, join: Join)) =>
+        CustomLogger.logMatchTime("stopTheClock : Match LimitPushDown", true)
+        {
+          LocalLimit(exp, project.copy(child = pushLocalLimitThroughJoin(exp, join)))
+        }
+      }
+    }
 }
 
 /**
@@ -749,23 +825,29 @@ object PushProjectionThroughUnion extends Rule[LogicalPlan] with PredicateHelper
     result.asInstanceOf[A]
   }
 
-  def apply(plan: LogicalPlan): LogicalPlan = plan.transformWithPruning(
-    _.containsAllPatterns(UNION, PROJECT)) {
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("stopTheClock : Transform PushProjectionThroughUnion")
+    {
+      plan.transformWithPruning(_.containsAllPatterns(UNION, PROJECT)) {
 
-    // Push down deterministic projection through UNION ALL
-    case p @ Project(projectList, u: Union) =>
-      assert(u.children.nonEmpty)
-      if (projectList.forall(_.deterministic)) {
-        val newFirstChild = Project(projectList, u.children.head)
-        val newOtherChildren = u.children.tail.map { child =>
-          val rewrites = buildRewrites(u.children.head, child)
-          Project(projectList.map(pushToRight(_, rewrites)), child)
+      // Push down deterministic projection through UNION ALL
+      case p @ Project(projectList, u: Union) =>
+        CustomLogger.logMatchTime("stopTheClock : Match 1 PushProjectionThroughUnion", false)
+        {
+          assert(u.children.nonEmpty)
+          if (projectList.forall(_.deterministic)) {
+            val newFirstChild = Project(projectList, u.children.head)
+            val newOtherChildren = u.children.tail.map { child =>
+              val rewrites = buildRewrites(u.children.head, child)
+              Project(projectList.map(pushToRight(_, rewrites)), child)
+            }
+            u.copy(children = newFirstChild +: newOtherChildren)
+          } else {
+            p
+          }
         }
-        u.copy(children = newFirstChild +: newOtherChildren)
-      } else {
-        p
       }
-  }
+    }
 }
 
 /**
@@ -780,105 +862,176 @@ object PushProjectionThroughUnion extends Rule[LogicalPlan] with PredicateHelper
  */
 object ColumnPruning extends Rule[LogicalPlan] {
 
-  def apply(plan: LogicalPlan): LogicalPlan = removeProjectBeforeFilter(
-    plan.transformWithPruning(AlwaysProcess.fn, ruleId) {
-    // Prunes the unused columns from project list of Project/Aggregate/Expand
-    case p @ Project(_, p2: Project) if !p2.outputSet.subsetOf(p.references) =>
-      p.copy(child = p2.copy(projectList = p2.projectList.filter(p.references.contains)))
-    case p @ Project(_, a: Aggregate) if !a.outputSet.subsetOf(p.references) =>
-      p.copy(
-        child = a.copy(aggregateExpressions = a.aggregateExpressions.filter(p.references.contains)))
-    case a @ Project(_, e @ Expand(_, _, grandChild)) if !e.outputSet.subsetOf(a.references) =>
-      val newOutput = e.output.filter(a.references.contains(_))
-      val newProjects = e.projections.map { proj =>
-        proj.zip(e.output).filter { case (_, a) =>
-          newOutput.contains(a)
-        }.unzip._1
-      }
-      a.copy(child = Expand(newProjects, newOutput, grandChild))
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("stopTheClock : Transform ColumnPruning")
+    {
+      removeProjectBeforeFilter(plan.transformWithPruning(AlwaysProcess.fn, ruleId) {
+        // Prunes the unused columns from project list of Project/Aggregate/Expand
+        case p @ Project(_, p2: Project) if !p2.outputSet.subsetOf(p.references) =>
+          CustomLogger.logMatchTime("stopTheClock : Match 1 ColumnPruning", true)
+          {
+            p.copy(child = p2.copy(projectList = p2.projectList.filter(p.references.contains)))
+          }
+        case p @ Project(_, a: Aggregate) if !a.outputSet.subsetOf(p.references) =>
+          CustomLogger.logMatchTime("stopTheClock : Match 2 ColumnPruning", true)
+          {
+            p.copy(
+              child = a.copy(aggregateExpressions = a.aggregateExpressions.filter(
+                p.references.contains)))
+          }
+        case a @ Project(_, e @ Expand(_, _, grandChild)) if !e.outputSet.subsetOf(a.references) =>
+          CustomLogger.logMatchTime("stopTheClock : Match 3 ColumnPruning", true)
+          {
+            val newOutput = e.output.filter(a.references.contains(_))
+            val newProjects = e.projections.map { proj =>
+              proj.zip(e.output).filter { case (_, a) =>
+                newOutput.contains(a)
+              }.unzip._1
+            }
+            a.copy(child = Expand(newProjects, newOutput, grandChild))
+          }
 
-    // Prune and drop AttachDistributedSequence if the produced attribute is not referred.
-    case p @ Project(_, a @ AttachDistributedSequence(_, grandChild))
+          // Prune and drop AttachDistributedSequence if the produced attribute is not referred.
+        case p @ Project(_, a @ AttachDistributedSequence(_, grandChild))
         if !p.references.contains(a.sequenceAttr) =>
-      p.copy(child = prunedChild(grandChild, p.references))
+          CustomLogger.logMatchTime("stopTheClock : Match 4 ColumnPruning", true)
+          {
+            p.copy(child = prunedChild(grandChild, p.references))
+          }
 
-    // Prunes the unused columns from child of `DeserializeToObject`
-    case d @ DeserializeToObject(_, _, child) if !child.outputSet.subsetOf(d.references) =>
-      d.copy(child = prunedChild(child, d.references))
+          // Prunes the unused columns from child of `DeserializeToObject`
+        case d @ DeserializeToObject(_, _, child) if !child.outputSet.subsetOf(d.references) =>
+          CustomLogger.logMatchTime("stopTheClock : Match 5 ColumnPruning", true)
+          {
+            d.copy(child = prunedChild(child, d.references))
+          }
 
-    // Prunes the unused columns from child of Aggregate/Expand/Generate/ScriptTransformation
-    case a @ Aggregate(_, _, child) if !child.outputSet.subsetOf(a.references) =>
-      a.copy(child = prunedChild(child, a.references))
-    case f @ FlatMapGroupsInPandas(_, _, _, child) if !child.outputSet.subsetOf(f.references) =>
-      f.copy(child = prunedChild(child, f.references))
-    case e @ Expand(_, _, child) if !child.outputSet.subsetOf(e.references) =>
-      e.copy(child = prunedChild(child, e.references))
+          // Prunes the unused columns from child of Aggregate/Expand/Generate/ScriptTransformation
+        case a @ Aggregate(_, _, child) if !child.outputSet.subsetOf(a.references) =>
+          CustomLogger.logMatchTime("stopTheClock : Match 6 ColumnPruning", true)
+          {
+            a.copy(child = prunedChild(child, a.references))
+          }
 
-    // prune unrequired references
-    case p @ Project(_, g: Generate) if p.references != g.outputSet =>
-      val requiredAttrs = p.references -- g.producedAttributes ++ g.generator.references
-      val newChild = prunedChild(g.child, requiredAttrs)
-      val unrequired = g.generator.references -- p.references
-      val unrequiredIndices = newChild.output.zipWithIndex.filter(t => unrequired.contains(t._1))
-        .map(_._2)
-      p.copy(child = g.copy(child = newChild, unrequiredChildIndex = unrequiredIndices))
+        case f @ FlatMapGroupsInPandas(_, _, _, child) if !child.outputSet.subsetOf(
+          f.references) =>
+          CustomLogger.logMatchTime("stopTheClock : Match 7 ColumnPruning", true)
+          {
+            f.copy(child = prunedChild(child, f.references))
+          }
 
-    // prune unrequired nested fields from `Generate`.
-    case GeneratorNestedColumnAliasing(rewrittenPlan) => rewrittenPlan
+        case e @ Expand(_, _, child) if !child.outputSet.subsetOf(e.references) =>
+          CustomLogger.logMatchTime("stopTheClock : Match 8 ColumnPruning", true)
+          {
+            e.copy(child = prunedChild(child, e.references))
+          }
 
-    // Eliminate unneeded attributes from right side of a Left Existence Join.
-    case j @ Join(_, right, LeftExistence(_), _, _) =>
-      j.copy(right = prunedChild(right, j.references))
+          // prune unrequired references
+        case p @ Project(_, g: Generate) if p.references != g.outputSet =>
+          CustomLogger.logMatchTime("stopTheClock : Match 9 ColumnPruning", true)
+          {
+            val requiredAttrs = p.references -- g.producedAttributes ++ g.generator.references
+            val newChild = prunedChild(g.child, requiredAttrs)
+            val unrequired = g.generator.references -- p.references
+            val unrequiredIndices = newChild.output.zipWithIndex.filter(t =>
+                unrequired.contains(t._1))
+              .map(_._2)
+              p.copy(child = g.copy(child = newChild, unrequiredChildIndex = unrequiredIndices))
+          }
 
-    // all the columns will be used to compare, so we can't prune them
-    case p @ Project(_, _: SetOperation) => p
-    case p @ Project(_, _: Distinct) => p
-    // Eliminate unneeded attributes from children of Union.
-    case p @ Project(_, u: Union) =>
-      if (!u.outputSet.subsetOf(p.references)) {
-        val firstChild = u.children.head
-        val newOutput = prunedChild(firstChild, p.references).output
-        // pruning the columns of all children based on the pruned first child.
-        val newChildren = u.children.map { p =>
-          val selected = p.output.zipWithIndex.filter { case (a, i) =>
-            newOutput.contains(firstChild.output(i))
-          }.map(_._1)
-          Project(selected, p)
-        }
-        p.copy(child = u.withNewChildren(newChildren))
-      } else {
-        p
+          // prune unrequired nested fields from `Generate`.
+        case GeneratorNestedColumnAliasing(rewrittenPlan) =>
+          CustomLogger.logMatchTime("stopTheClock : Match 10 ColumnPruning", false)
+          {
+            rewrittenPlan
+          }
+
+          // Eliminate unneeded attributes from right side of a Left Existence Join.
+        case j @ Join(_, right, LeftExistence(_), _, _) =>
+          CustomLogger.logMatchTime("stopTheClock : Match 11 ColumnPruning", true)
+          {
+            j.copy(right = prunedChild(right, j.references))
+          }
+
+          // all the columns will be used to compare, so we can't prune them
+        case p @ Project(_, _: SetOperation) =>
+          CustomLogger.logMatchTime("stopTheClock : Match 12 ColumnPruning", false)
+          {
+            p
+          }
+        case p @ Project(_, _: Distinct) =>
+          CustomLogger.logMatchTime("stopTheClock : Match 13 ColumnPruning", false)
+          {
+            p
+          }
+
+          // Eliminate unneeded attributes from children of Union.
+        case p @ Project(_, u: Union) =>
+          CustomLogger.logMatchTime("stopTheClock : Match 14 ColumnPruning", false)
+          {
+            if (!u.outputSet.subsetOf(p.references)) {
+              val firstChild = u.children.head
+              val newOutput = prunedChild(firstChild, p.references).output
+              // pruning the columns of all children based on the pruned first child.
+              val newChildren = u.children.map { p =>
+                val selected = p.output.zipWithIndex.filter { case (a, i) =>
+                  newOutput.contains(firstChild.output(i))
+                }.map(_._1)
+                Project(selected, p)
+              }
+              p.copy(child = u.withNewChildren(newChildren))
+            } else {
+              p
+            }
+          }
+
+          // Prune unnecessary window expressions
+        case p @ Project(_, w: Window) if !w.windowOutputSet.subsetOf(p.references) =>
+          CustomLogger.logMatchTime("stopTheClock : Match 15 ColumnPruning", true)
+          {
+            p.copy(child = w.copy(
+              windowExpressions = w.windowExpressions.filter(p.references.contains)))
+          }
+
+          // Prune WithCTE
+        case p @ Project(_, w: WithCTE) =>
+          CustomLogger.logMatchTime("stopTheClock : Match 16 ColumnPruning", true)
+          {
+            if (!w.outputSet.subsetOf(p.references)) {
+              p.copy(child = w.withNewPlan(prunedChild(w.plan, p.references)))
+            } else {
+              p
+            }
+          }
+
+          // Can't prune the columns on LeafNode
+        case p @ Project(_, _: LeafNode) =>
+          CustomLogger.logMatchTime("stopTheClock : Match 17 ColumnPruning", false)
+          {
+            p
+          }
+
+        case NestedColumnAliasing(rewrittenPlan) =>
+          CustomLogger.logMatchTime("stopTheClock : Match 18 ColumnPruning", false)
+          {
+            rewrittenPlan
+          }
+
+          // for all other logical plans that inherits the output from it's children
+          // Project over project is handled by the first case, skip it here.
+        case p @ Project(_, child) if !child.isInstanceOf[Project] =>
+          CustomLogger.logMatchTime("stopTheClock : Match 19 ColumnPruning", true)
+          {
+            val required = child.references ++ p.references
+            if (!child.inputSet.subsetOf(required)) {
+              val newChildren = child.children.map(c => prunedChild(c, required))
+              p.copy(child = child.withNewChildren(newChildren))
+            } else {
+              p
+            }
+          }
       }
-
-    // Prune unnecessary window expressions
-    case p @ Project(_, w: Window) if !w.windowOutputSet.subsetOf(p.references) =>
-      p.copy(child = w.copy(
-        windowExpressions = w.windowExpressions.filter(p.references.contains)))
-
-    // Prune WithCTE
-    case p @ Project(_, w: WithCTE) =>
-      if (!w.outputSet.subsetOf(p.references)) {
-        p.copy(child = w.withNewPlan(prunedChild(w.plan, p.references)))
-      } else {
-        p
-      }
-
-    // Can't prune the columns on LeafNode
-    case p @ Project(_, _: LeafNode) => p
-
-    case NestedColumnAliasing(rewrittenPlan) => rewrittenPlan
-
-    // for all other logical plans that inherits the output from it's children
-    // Project over project is handled by the first case, skip it here.
-    case p @ Project(_, child) if !child.isInstanceOf[Project] =>
-      val required = child.references ++ p.references
-      if (!child.inputSet.subsetOf(required)) {
-        val newChildren = child.children.map(c => prunedChild(c, required))
-        p.copy(child = child.withNewChildren(newChildren))
-      } else {
-        p
-      }
-  })
+    )}
 
   /** Applies a projection only when the child is producing unnecessary attributes */
   private def prunedChild(c: LogicalPlan, allReferences: AttributeSet) =
@@ -893,13 +1046,20 @@ object ColumnPruning extends Rule[LogicalPlan] {
    * so remove it. Since the Projects have been added top-down, we need to remove in bottom-up
    * order, otherwise lower Projects can be missed.
    */
-  private def removeProjectBeforeFilter(plan: LogicalPlan): LogicalPlan = plan transformUp {
-    case p1 @ Project(_, f @ Filter(_, p2 @ Project(_, child)))
-      if p2.outputSet.subsetOf(child.outputSet) &&
+  private def removeProjectBeforeFilter(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("stopTheClock : Transform removeProjectBeforeFilter")
+    {
+      plan transformUp {
+        case p1 @ Project(_, f @ Filter(_, p2 @ Project(_, child)))
+        if p2.outputSet.subsetOf(child.outputSet) &&
         // We only remove attribute-only project.
         p2.projectList.forall(_.isInstanceOf[AttributeReference]) =>
-      p1.copy(child = f.copy(child = child))
-  }
+          CustomLogger.logMatchTime("stopTheClock : Match 1 removeProjectBeforeFilter", true)
+          {
+            p1.copy(child = f.copy(child = child))
+          }
+      }
+    }
 }
 
 /**
@@ -912,35 +1072,59 @@ object ColumnPruning extends Rule[LogicalPlan] {
  */
 object CollapseProject extends Rule[LogicalPlan] with AliasHelper {
 
-  def apply(plan: LogicalPlan): LogicalPlan = plan.transformUpWithPruning(
-    _.containsPattern(PROJECT), ruleId) {
-    case p1 @ Project(_, p2: Project) =>
-      if (haveCommonNonDeterministicOutput(p1.projectList, p2.projectList)) {
-        p1
-      } else {
-        p2.copy(projectList = buildCleanedProjectList(p1.projectList, p2.projectList))
-      }
-    case p @ Project(_, agg: Aggregate) =>
-      if (haveCommonNonDeterministicOutput(p.projectList, agg.aggregateExpressions) ||
-          !canCollapseAggregate(p, agg)) {
-        p
-      } else {
-        agg.copy(aggregateExpressions = buildCleanedProjectList(
-          p.projectList, agg.aggregateExpressions))
-      }
-    case Project(l1, g @ GlobalLimit(_, limit @ LocalLimit(_, p2 @ Project(l2, _))))
-        if isRenaming(l1, l2) =>
-      val newProjectList = buildCleanedProjectList(l1, l2)
-      g.copy(child = limit.copy(child = p2.copy(projectList = newProjectList)))
-    case Project(l1, limit @ LocalLimit(_, p2 @ Project(l2, _))) if isRenaming(l1, l2) =>
-      val newProjectList = buildCleanedProjectList(l1, l2)
-      limit.copy(child = p2.copy(projectList = newProjectList))
-    case Project(l1, r @ Repartition(_, _, p @ Project(l2, _))) if isRenaming(l1, l2) =>
-      r.copy(child = p.copy(projectList = buildCleanedProjectList(l1, p.projectList)))
-    case Project(l1, s @ Sample(_, _, _, _, p2 @ Project(l2, _))) if isRenaming(l1, l2) =>
-      s.copy(child = p2.copy(projectList = buildCleanedProjectList(l1, p2.projectList)))
-  }
-
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("stopTheClock : Transform CollapseProject")
+    {
+        plan.transformUpWithPruning(_.containsPattern(PROJECT), ruleId) {
+            case p1 @ Project(_, p2: Project) =>
+                CustomLogger.logMatchTime("stopTheClock : Match 1 CollapseProject", false)
+                {
+                    if (haveCommonNonDeterministicOutput(p1.projectList, p2.projectList)) {
+                        p1
+                    } else {
+                        p2.copy(projectList = buildCleanedProjectList(
+                            p1.projectList, p2.projectList))
+                    }
+                }
+            case p @ Project(_, agg: Aggregate) =>
+                CustomLogger.logMatchTime("stopTheClock : Match 2 CollapseProject", false)
+                {
+                    if (haveCommonNonDeterministicOutput(
+                        p.projectList, agg.aggregateExpressions) ||
+                        !canCollapseAggregate(p, agg)) {
+                            p
+                        } else {
+                            agg.copy(aggregateExpressions = buildCleanedProjectList(
+                                p.projectList, agg.aggregateExpressions))
+                        }
+                }
+            case Project(l1, g @ GlobalLimit(_, limit @ LocalLimit(_, p2 @ Project(l2, _))))
+            if isRenaming(l1, l2) =>
+                CustomLogger.logMatchTime("stopTheClock : Match 3 CollapseProject", false)
+                {
+                    val newProjectList = buildCleanedProjectList(l1, l2)
+                    g.copy(child = limit.copy(child = p2.copy(projectList = newProjectList)))
+                }
+            case Project(l1, limit @ LocalLimit(_, p2 @ Project(l2, _))) if isRenaming(l1, l2) =>
+                CustomLogger.logMatchTime("stopTheClock : Match 4 CollapseProject", false)
+                {
+                    val newProjectList = buildCleanedProjectList(l1, l2)
+                    limit.copy(child = p2.copy(projectList = newProjectList))
+                }
+            case Project(l1, r @ Repartition(_, _, p @ Project(l2, _))) if isRenaming(l1, l2) =>
+                CustomLogger.logMatchTime("stopTheClock : Match 5 CollapseProject", false)
+                {
+                    r.copy(child = p.copy(projectList = buildCleanedProjectList(
+                        l1, p.projectList)))
+                }
+            case Project(l1, s @ Sample(_, _, _, _, p2 @ Project(l2, _))) if isRenaming(l1, l2) =>
+                CustomLogger.logMatchTime("stopTheClock : Match 6 CollapseProject", false)
+                {
+                    s.copy(child = p2.copy(projectList = buildCleanedProjectList(
+                        l1, p2.projectList)))
+                }
+        }
+    }
   private def haveCommonNonDeterministicOutput(
       upper: Seq[NamedExpression], lower: Seq[NamedExpression]): Boolean = {
     val aliases = getAliasMap(lower)
@@ -984,52 +1168,78 @@ object CollapseProject extends Rule[LogicalPlan] with AliasHelper {
  * Combines adjacent [[RepartitionOperation]] operators
  */
 object CollapseRepartition extends Rule[LogicalPlan] {
-  def apply(plan: LogicalPlan): LogicalPlan = plan.transformUpWithPruning(
-    _.containsPattern(REPARTITION_OPERATION), ruleId) {
-    // Case 1: When a Repartition has a child of Repartition or RepartitionByExpression,
-    // 1) When the top node does not enable the shuffle (i.e., coalesce API), but the child
-    //   enables the shuffle. Returns the child node if the last numPartitions is bigger;
-    //   otherwise, keep unchanged.
-    // 2) In the other cases, returns the top node with the child's child
-    case r @ Repartition(_, _, child: RepartitionOperation) => (r.shuffle, child.shuffle) match {
-      case (false, true) => if (r.numPartitions >= child.numPartitions) child else r
-      case _ => r.copy(child = child.child)
-    }
-    // Case 2: When a RepartitionByExpression has a child of Repartition or RepartitionByExpression
-    // we can remove the child.
-    case r @ RepartitionByExpression(_, child: RepartitionOperation, _) =>
-      r.copy(child = child.child)
-  }
+    def apply(plan: LogicalPlan): LogicalPlan =
+        CustomLogger.logTransformTime("stopTheClock : Transform CollapseRepartition")
+        {
+            plan.transformUpWithPruning(_.containsPattern(REPARTITION_OPERATION), ruleId) {
+                // Case 1: When a Repartition has a child of Repartition or
+                // RepartitionByExpression,
+                // 1) When the top node does not enable the shuffle (i.e., coalesce API),
+                // but the child enables the shuffle. Returns the child node if the last
+                // numPartitions is bigger; otherwise, keep unchanged.
+                // 2) In the other cases, returns the top node with the child's child
+                case r @ Repartition(_, _, child: RepartitionOperation) =>
+                    CustomLogger.logMatchTime("stopTheClock : Match 1 CollapseRepartition", true)
+                    {
+                        (r.shuffle, child.shuffle) match {
+                            case (false, true) =>
+                                if (r.numPartitions >= child.numPartitions) child else r
+                            case _ => r.copy(child = child.child)
+                        }
+                    }
+                    // Case 2: When a RepartitionByExpression has a child of Repartition or
+                    // RepartitionByExpression we can remove the child.
+                case r @ RepartitionByExpression(_, child: RepartitionOperation, _) =>
+                    CustomLogger.logMatchTime("stopTheClock : Match 2 CollapseRepartition", true)
+                    {
+                        r.copy(child = child.child)
+                    }
+            }
+        }
 }
+
 
 /**
  * Replace RepartitionByExpression numPartitions to 1 if all partition expressions are foldable
  * and user not specify.
  */
 object OptimizeRepartition extends Rule[LogicalPlan] {
-  override def apply(plan: LogicalPlan): LogicalPlan = plan.transformWithPruning(
-    _.containsPattern(REPARTITION_OPERATION), ruleId) {
-    case r @ RepartitionByExpression(partitionExpressions, _, numPartitions)
-      if partitionExpressions.nonEmpty && partitionExpressions.forall(_.foldable) &&
-        numPartitions.isEmpty =>
-      r.copy(optNumPartitions = Some(1))
-  }
+    override def apply(plan: LogicalPlan): LogicalPlan =
+        CustomLogger.logTransformTime("stopTheClock : Transform OptimizeRepartition")
+        {
+            plan.transformWithPruning(_.containsPattern(REPARTITION_OPERATION), ruleId) {
+                case r @ RepartitionByExpression(partitionExpressions, _, numPartitions)
+                if partitionExpressions.nonEmpty && partitionExpressions.forall(_.foldable) &&
+                numPartitions.isEmpty =>
+                    CustomLogger.logMatchTime("stopTheClock : Match 1 OptimizeRepartition", true)
+                    {
+                        r.copy(optNumPartitions = Some(1))
+                    }
+            }
+        }
 }
 
 /**
  * Replaces first(col) to nth_value(col, 1) for better performance.
  */
 object OptimizeWindowFunctions extends Rule[LogicalPlan] {
-  def apply(plan: LogicalPlan): LogicalPlan = plan.resolveExpressionsWithPruning(
-    _.containsPattern(WINDOW_EXPRESSION), ruleId) {
-    case we @ WindowExpression(AggregateExpression(first: First, _, _, _, _),
-        WindowSpecDefinition(_, orderSpec, frameSpecification: SpecifiedWindowFrame))
-        if orderSpec.nonEmpty && frameSpecification.frameType == RowFrame &&
-          frameSpecification.lower == UnboundedPreceding &&
-          (frameSpecification.upper == UnboundedFollowing ||
-            frameSpecification.upper == CurrentRow) =>
-      we.copy(windowFunction = NthValue(first.child, Literal(1), first.ignoreNulls))
-  }
+  def apply(plan: LogicalPlan): LogicalPlan =
+      CustomLogger.logTransformTime("stopTheClock : Transform OptimizeWindowFunctions")
+      {
+          plan.resolveExpressionsWithPruning(_.containsPattern(WINDOW_EXPRESSION), ruleId) {
+              case we @ WindowExpression(AggregateExpression(first: First, _, _, _, _),
+                  WindowSpecDefinition(_, orderSpec, frameSpecification: SpecifiedWindowFrame))
+              if orderSpec.nonEmpty && frameSpecification.frameType == RowFrame &&
+              frameSpecification.lower == UnboundedPreceding &&
+              (frameSpecification.upper == UnboundedFollowing ||
+                  frameSpecification.upper == CurrentRow) =>
+                  CustomLogger.logMatchTime("stopTheClock : Match 1 CollapseWindow", true)
+                  {
+                      we.copy(
+                          windowFunction = NthValue(first.child, Literal(1), first.ignoreNulls))
+                  }
+          }
+      }
 }
 
 /**
@@ -1049,18 +1259,27 @@ object CollapseWindow extends Rule[LogicalPlan] {
         WindowFunctionType.functionType(w2.windowExpressions.head)
   }
 
-  def apply(plan: LogicalPlan): LogicalPlan = plan.transformUpWithPruning(
-    _.containsPattern(WINDOW), ruleId) {
-    case w1 @ Window(we1, _, _, w2 @ Window(we2, _, _, grandChild))
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("stopTheClock : Transform CollapseWindow")
+    {
+      plan.transformUpWithPruning(_.containsPattern(WINDOW), ruleId) {
+        case w1 @ Window(we1, _, _, w2 @ Window(we2, _, _, grandChild))
         if windowsCompatible(w1, w2) =>
-      w1.copy(windowExpressions = we2 ++ we1, child = grandChild)
+          CustomLogger.logMatchTime("stopTheClock : Match 1 CollapseWindow", true)
+          {
+            w1.copy(windowExpressions = we2 ++ we1, child = grandChild)
+          }
 
-    case w1 @ Window(we1, _, _, Project(pl, w2 @ Window(we2, _, _, grandChild)))
+        case w1 @ Window(we1, _, _, Project(pl, w2 @ Window(we2, _, _, grandChild)))
         if windowsCompatible(w1, w2) && w1.references.subsetOf(grandChild.outputSet) =>
-      Project(
-        pl ++ w1.windowOutputSet,
-        w1.copy(windowExpressions = we2 ++ we1, child = grandChild))
-  }
+          CustomLogger.logMatchTime("stopTheClock : Match 2 CollapseWindow", true)
+          {
+            Project(
+              pl ++ w1.windowOutputSet,
+              w1.copy(windowExpressions = we2 ++ we1, child = grandChild))
+          }
+      }
+    }
 }
 
 /**
@@ -1082,18 +1301,27 @@ object TransposeWindow extends Rule[LogicalPlan] {
       compatiblePartitions(w1.partitionSpec, w2.partitionSpec)
   }
 
-  def apply(plan: LogicalPlan): LogicalPlan = plan.transformUpWithPruning(
-    _.containsPattern(WINDOW), ruleId) {
-    case w1 @ Window(_, _, _, w2 @ Window(_, _, _, grandChild))
-      if windowsCompatible(w1, w2) =>
-      Project(w1.output, w2.copy(child = w1.copy(child = grandChild)))
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("stopTheClock : Transform TransposeWindow")
+    {
+      plan.transformUpWithPruning(_.containsPattern(WINDOW), ruleId) {
+        case w1 @ Window(_, _, _, w2 @ Window(_, _, _, grandChild))
+        if windowsCompatible(w1, w2) =>
+          CustomLogger.logMatchTime("stopTheClock : Match 1 TransposeWindow", true)
+          {
+            Project(w1.output, w2.copy(child = w1.copy(child = grandChild)))
+          }
 
-    case w1 @ Window(_, _, _, Project(pl, w2 @ Window(_, _, _, grandChild)))
-      if windowsCompatible(w1, w2) && w1.references.subsetOf(grandChild.outputSet) =>
-      Project(
-        pl ++ w1.windowOutputSet,
-        w2.copy(child = w1.copy(child = grandChild)))
-  }
+        case w1 @ Window(_, _, _, Project(pl, w2 @ Window(_, _, _, grandChild)))
+        if windowsCompatible(w1, w2) && w1.references.subsetOf(grandChild.outputSet) =>
+          CustomLogger.logMatchTime("stopTheClock : Match 2 TransposeWindow", true)
+          {
+            Project(
+              pl ++ w1.windowOutputSet,
+              w2.copy(child = w1.copy(child = grandChild)))
+          }
+      }
+    }
 }
 
 /**
@@ -1101,35 +1329,41 @@ object TransposeWindow extends Rule[LogicalPlan] {
  * by this [[Generate]] can be removed earlier - before joins and in data sources.
  */
 object InferFiltersFromGenerate extends Rule[LogicalPlan] {
-  def apply(plan: LogicalPlan): LogicalPlan = plan.transformUpWithPruning(
-    _.containsPattern(GENERATE)) {
-    case generate @ Generate(g, _, false, _, _, _) if canInferFilters(g) =>
-      assert(g.children.length == 1)
-      val input = g.children.head
-      // Generating extra predicates here has overheads/risks:
-      //   - We may evaluate expensive input expressions multiple times.
-      //   - We may infer too many constraints later.
-      //   - The input expression may fail to be evaluated under ANSI mode. If we reorder the
-      //     predicates and evaluate the input expression first, we may fail the query unexpectedly.
-      // To be safe, here we only generate extra predicates if the input is an attribute.
-      // Note that, foldable input is also excluded here, to avoid constant filters like
-      // 'size([1, 2, 3]) > 0'. These do not show up in child's constraints and then the
-      // idempotence will break.
-      if (input.isInstanceOf[Attribute]) {
-        // Exclude child's constraints to guarantee idempotency
-        val inferredFilters = ExpressionSet(
-          Seq(GreaterThan(Size(input), Literal(0)), IsNotNull(input))
-        ) -- generate.child.constraints
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("stopTheClock : Transform InferFiltersFromGenerate")
+    {
+      plan.transformUpWithPruning(_.containsPattern(GENERATE)) {
+        case generate @ Generate(g, _, false, _, _, _) if canInferFilters(g) =>
+          CustomLogger.logMatchTime("stopTheClock : Match 1 InferFiltersFromGenerate", true)
+          {
+            assert(g.children.length == 1)
+            val input = g.children.head
+            // Generating extra predicates here has overheads/risks:
+            //   - We may evaluate expensive input expressions multiple times.
+            //   - We may infer too many constraints later.
+            //   - The input expression may fail to be evaluated under ANSI mode. If we reorder the
+            //     predicates and evaluate the input expression first, we may fail the query
+            //  unexpectedly. To be safe, here we only generate extra predicates if the input is
+            //  an atribute .Note that, foldable input is also excluded here, to avoid constant
+            //  filters like 'size([1, 2, 3]) > 0'. These do not show up in child's constraints
+            //  and then the idempotence will break.
+            if (input.isInstanceOf[Attribute]) {
+              // Exclude child's constraints to guarantee idempotency
+              val inferredFilters = ExpressionSet(
+                Seq(GreaterThan(Size(input), Literal(0)), IsNotNull(input))
+              ) -- generate.child.constraints
 
-        if (inferredFilters.nonEmpty) {
-          generate.copy(child = Filter(inferredFilters.reduce(And), generate.child))
-        } else {
-          generate
-        }
-      } else {
-        generate
+              if (inferredFilters.nonEmpty) {
+                generate.copy(child = Filter(inferredFilters.reduce(And), generate.child))
+              } else {
+                generate
+              }
+              } else {
+                generate
+              }
+          }
       }
-  }
+    }
 
   private def canInferFilters(g: Generator): Boolean = g match {
     case _: ExplodeBase => true
@@ -1158,42 +1392,51 @@ object InferFiltersFromConstraints extends Rule[LogicalPlan]
     }
   }
 
-  private def inferFilters(plan: LogicalPlan): LogicalPlan = plan.transformWithPruning(
-    _.containsAnyPattern(FILTER, JOIN)) {
-    case filter @ Filter(condition, child) =>
-      val newFilters = filter.constraints --
-        (child.constraints ++ splitConjunctivePredicates(condition))
-      if (newFilters.nonEmpty) {
-        Filter(And(newFilters.reduce(And), condition), child)
-      } else {
-        filter
-      }
+  private def inferFilters(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("stopTheClock : Transform InferFiltersFromConstraints")
+    {
+      plan.transformWithPruning(_.containsAnyPattern(FILTER, JOIN)) {
+        case filter @ Filter(condition, child) =>
+          CustomLogger.logMatchTime("stopTheClock : Match 1 InferFiltersFromConstraints", false)
+          {
+            val newFilters = filter.constraints --
+            (child.constraints ++ splitConjunctivePredicates(condition))
+            if (newFilters.nonEmpty) {
+              Filter(And(newFilters.reduce(And), condition), child)
+            } else {
+              filter
+            }
+          }
 
-    case join @ Join(left, right, joinType, conditionOpt, _) =>
-      joinType match {
-        // For inner join, we can infer additional filters for both sides. LeftSemi is kind of an
-        // inner join, it just drops the right side in the final output.
+        case join @ Join(left, right, joinType, conditionOpt, _) =>
+          CustomLogger.logMatchTime("stopTheClock : Match 2 InferFiltersFromConstraints", false)
+          {
+            joinType match {
+              // For inner join, we can infer additional filters for both sides. LeftSemi is
+              // kind of an inner join, it just drops the right side in the final output.
         case _: InnerLike | LeftSemi =>
           val allConstraints = getAllConstraints(left, right, conditionOpt)
           val newLeft = inferNewFilter(left, allConstraints)
           val newRight = inferNewFilter(right, allConstraints)
           join.copy(left = newLeft, right = newRight)
 
-        // For right outer join, we can only infer additional filters for left side.
+          // For right outer join, we can only infer additional filters for left side.
         case RightOuter =>
           val allConstraints = getAllConstraints(left, right, conditionOpt)
           val newLeft = inferNewFilter(left, allConstraints)
           join.copy(left = newLeft)
 
-        // For left join, we can only infer additional filters for right side.
+          // For left join, we can only infer additional filters for right side.
         case LeftOuter | LeftAnti =>
           val allConstraints = getAllConstraints(left, right, conditionOpt)
           val newRight = inferNewFilter(right, allConstraints)
           join.copy(right = newRight)
 
         case _ => join
+            }
+          }
       }
-  }
+    }
 
   private def getAllConstraints(
       left: LogicalPlan,
@@ -1222,14 +1465,28 @@ object InferFiltersFromConstraints extends Rule[LogicalPlan]
  * Combines all adjacent [[Union]] operators into a single [[Union]].
  */
 object CombineUnions extends Rule[LogicalPlan] {
-  def apply(plan: LogicalPlan): LogicalPlan = plan.transformDownWithPruning(
-    _.containsAnyPattern(UNION, DISTINCT_LIKE), ruleId) {
-    case u: Union => flattenUnion(u, false)
-    case Distinct(u: Union) => Distinct(flattenUnion(u, true))
-    // Only handle distinct-like 'Deduplicate', where the keys == output
-    case Deduplicate(keys: Seq[Attribute], u: Union) if AttributeSet(keys) == u.outputSet =>
-      Deduplicate(keys, flattenUnion(u, true))
-  }
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("stopTheClock : Transform CombineUnions")
+    {
+      plan.transformDownWithPruning(_.containsAnyPattern(UNION, DISTINCT_LIKE), ruleId) {
+        case u: Union =>
+          CustomLogger.logMatchTime("stopTheClock : Match 1 CombineUnions", true)
+          {
+            flattenUnion(u, false)
+          }
+        case Distinct(u: Union) =>
+          CustomLogger.logMatchTime("stopTheClock : Match 2 CombineUnions", true)
+          {
+            Distinct(flattenUnion(u, true))
+          }
+        // Only handle distinct-like 'Deduplicate', where the keys == output
+        case Deduplicate(keys: Seq[Attribute], u: Union) if AttributeSet(keys) == u.outputSet =>
+          CustomLogger.logMatchTime("stopTheClock : Match 3 CombineUnions", true)
+          {
+            Deduplicate(keys, flattenUnion(u, true))
+          }
+      }
+    }
 
   private def flattenUnion(union: Union, flattenDistinct: Boolean): Union = {
     val topByName = union.byName
@@ -1267,23 +1524,29 @@ object CombineUnions extends Rule[LogicalPlan] {
  * one conjunctive predicate.
  */
 object CombineFilters extends Rule[LogicalPlan] with PredicateHelper {
-  def apply(plan: LogicalPlan): LogicalPlan = plan.transformWithPruning(
-    _.containsPattern(FILTER), ruleId)(applyLocally)
-
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("stopTheClock : Transform CombineFilters")
+    {
+      plan.transformWithPruning(_.containsPattern(FILTER), ruleId)(applyLocally)
+    }
   val applyLocally: PartialFunction[LogicalPlan, LogicalPlan] = {
     // The query execution/optimization does not guarantee the expressions are evaluated in order.
     // We only can combine them if and only if both are deterministic.
     case Filter(fc, nf @ Filter(nc, grandChild)) if nc.deterministic =>
-      val (combineCandidates, nonDeterministic) =
-        splitConjunctivePredicates(fc).partition(_.deterministic)
-      val mergedFilter = (ExpressionSet(combineCandidates) --
-        ExpressionSet(splitConjunctivePredicates(nc))).reduceOption(And) match {
-        case Some(ac) =>
-          Filter(And(nc, ac), grandChild)
-        case None =>
-          nf
+      CustomLogger.logMatchTime("stopTheClock : Match 1 CombineFilters", true)
+      {
+        val (combineCandidates, nonDeterministic) =
+          splitConjunctivePredicates(fc).partition(_.deterministic)
+        val mergedFilter = (ExpressionSet(combineCandidates) --
+          ExpressionSet(splitConjunctivePredicates(nc))).reduceOption(And) match {
+            case Some(ac) =>
+              Filter(And(nc, ac), grandChild)
+            case None =>
+              nf
+          }
+          nonDeterministic.reduceOption(
+            And).map(c => Filter(c, mergedFilter)).getOrElse(mergedFilter)
       }
-      nonDeterministic.reduceOption(And).map(c => Filter(c, mergedFilter)).getOrElse(mergedFilter)
   }
 }
 
@@ -1304,25 +1567,44 @@ object CombineFilters extends Rule[LogicalPlan] with PredicateHelper {
  *    function is order irrelevant
  */
 object EliminateSorts extends Rule[LogicalPlan] {
-  def apply(plan: LogicalPlan): LogicalPlan = plan.transformWithPruning(
-    _.containsPattern(SORT))(applyLocally)
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("stopTheClock : Transform EliminateSorts")
+    {
+      plan.transformWithPruning(_.containsPattern(SORT))(applyLocally)
+    }
 
   private val applyLocally: PartialFunction[LogicalPlan, LogicalPlan] = {
     case Sort(_, _, child) if child.maxRows.exists(_ <= 1L) => recursiveRemoveSort(child)
     case s @ Sort(orders, _, child) if orders.isEmpty || orders.exists(_.child.foldable) =>
-      val newOrders = orders.filterNot(_.child.foldable)
-      if (newOrders.isEmpty) {
-        applyLocally.lift(child).getOrElse(child)
-      } else {
-        s.copy(order = newOrders)
+      CustomLogger.logMatchTime("stopTheClock : Match 1 EliminateSorts", true)
+      {
+        val newOrders = orders.filterNot(_.child.foldable)
+        if (newOrders.isEmpty) {
+          applyLocally.lift(child).getOrElse(child)
+        } else {
+          s.copy(order = newOrders)
+        }
       }
     case Sort(orders, false, child) if SortOrder.orderingSatisfies(child.outputOrdering, orders) =>
-      applyLocally.lift(child).getOrElse(child)
-    case s @ Sort(_, _, child) => s.copy(child = recursiveRemoveSort(child))
+      CustomLogger.logMatchTime("stopTheClock : Match 2 EliminateSorts", true)
+      {
+        applyLocally.lift(child).getOrElse(child)
+      }
+    case s @ Sort(_, _, child) =>
+      CustomLogger.logMatchTime("stopTheClock : Match 2 EliminateSorts", true)
+      {
+        s.copy(child = recursiveRemoveSort(child))
+      }
     case j @ Join(originLeft, originRight, _, cond, _) if cond.forall(_.deterministic) =>
-      j.copy(left = recursiveRemoveSort(originLeft), right = recursiveRemoveSort(originRight))
+      CustomLogger.logMatchTime("stopTheClock : Match 3 EliminateSorts", true)
+      {
+        j.copy(left = recursiveRemoveSort(originLeft), right = recursiveRemoveSort(originRight))
+      }
     case g @ Aggregate(_, aggs, originChild) if isOrderIrrelevantAggs(aggs) =>
-      g.copy(child = recursiveRemoveSort(originChild))
+      CustomLogger.logMatchTime("stopTheClock : Match 4 EliminateSorts", true)
+      {
+        g.copy(child = recursiveRemoveSort(originChild))
+      }
   }
 
   private def recursiveRemoveSort(plan: LogicalPlan): LogicalPlan = {
