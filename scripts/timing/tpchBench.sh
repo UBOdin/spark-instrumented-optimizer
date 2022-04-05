@@ -1,12 +1,14 @@
 #!/bin/bash
 
-# trap for exiting the loop.
+# trap for exiting the loop(s).
 trap break INT
 
 # paths.
 OUTPUT="./output/"
 SHELLCOMMANDS="./shellCommands/"
 SPARKSHELL="../../bin/spark-shell"
+
+RUNS=5
 
 # sanity checks.
 
@@ -33,7 +35,10 @@ fi
 
 # loop over commands, and write output to both `stdout` and
 # specific output files.
-
-for file in $SHELLCOMMANDS*; do
-    cat $file | $SPARKSHELL | tee ${OUTPUT}$(basename $file)_output.txt
+for run in $(seq 1 $RUNS); do
+    mkdir ${OUTPUT}run${run}
+    for file in $SHELLCOMMANDS*; do
+        echo $run
+        cat $file | $SPARKSHELL | tee ${OUTPUT}run${run}/$(basename "$file" .scala).txt
+    done
 done

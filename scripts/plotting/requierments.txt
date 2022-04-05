@@ -1,0 +1,4 @@
+numpy
+pathlib
+matplotlib
+pandas
