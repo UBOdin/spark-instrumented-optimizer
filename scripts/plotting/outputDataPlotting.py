@@ -196,29 +196,29 @@ plt.savefig('./output/StackedTimeTpchAvg_New.pdf',bbox_inches='tight')
 plt.show()
 
 
-#plt.scatter(x_axis,((vsorted_ftesei_ns[:,3])/(vsorted_ftesei_ns[:,2] + vsorted_ftesei_ns[:,3] + vsorted_ftesei_ns[:,4] +vsorted_ftesei_ns[:,5]))*100,marker = 'x',color = 'g') 
-## naming the x axis 
-#plt.xlabel('Queries') 
-#plt.xticks(rotation = 90)
-#plt.tick_params(axis='x', which='major', labelsize=3.5)
-## naming the y axis 
-#plt.ylabel('Percentage Time Spent in Search') 
-#plt.ylim(ymin=0)
-#plt.ylim(ymax=100) 
-#plt.savefig('./output/PercentTimeTpchAvg_New.pdf',bbox_inches='tight') 
-#plt.show() 
-#
-#plt.scatter(x_axis,((vsorted_ftesei_ns[:,2])/(vsorted_ftesei_ns[:,2] + vsorted_ftesei_ns[:,3] + vsorted_ftesei_ns[:,4] +vsorted_ftesei_ns[:,5]))*100,marker = 'x',color = 'g') 
-## naming the x axis 
-#plt.xlabel('Queries') 
-#plt.xticks(rotation = 90)
-#plt.tick_params(axis='x', which='major', labelsize=3.5)
-## naming the y axis 
-#plt.ylabel('Percentage Time Spent in FixedPoint') 
-#plt.ylim(ymin=0)
-#plt.ylim(ymax=100) 
-#plt.savefig('./output/PercentTimeTpchExecuteAvg_New.pdf',bbox_inches='tight') 
-#plt.show() 
-#
-## print(Total_Search.shape)
-## print(Total_Search)
+plt.scatter(x_axis,((vsorted_ftesei_ns[:,3])/(vsorted_ftesei_ns[:,2] + vsorted_ftesei_ns[:,3] + vsorted_ftesei_ns[:,4] +vsorted_ftesei_ns[:,5]))*100,marker = 'x',color = 'g') 
+# naming the x axis 
+plt.xlabel('Queries') 
+plt.xticks(rotation = 90)
+plt.tick_params(axis='x', which='major', labelsize=3.5)
+# naming the y axis 
+plt.ylabel('Percentage Time Spent in Search') 
+plt.ylim(ymin=0)
+plt.ylim(ymax=100) 
+plt.savefig('./output/PercentTimeTpchAvg_New.pdf',bbox_inches='tight') 
+plt.show() 
+
+plt.scatter(x_axis,((vsorted_ftesei_ns[:,2])/(vsorted_ftesei_ns[:,2] + vsorted_ftesei_ns[:,3] + vsorted_ftesei_ns[:,4] +vsorted_ftesei_ns[:,5]))*100,marker = 'x',color = 'g') 
+# naming the x axis 
+plt.xlabel('Queries') 
+plt.xticks(rotation = 90)
+plt.tick_params(axis='x', which='major', labelsize=3.5)
+# naming the y axis 
+plt.ylabel('Percentage Time Spent in FixedPoint') 
+plt.ylim(ymin=0)
+plt.ylim(ymax=100) 
+plt.savefig('./output/PercentTimeTpchExecuteAvg_New.pdf',bbox_inches='tight') 
+plt.show() 
+
+# print(Total_Search.shape)
+# print(Total_Search)
