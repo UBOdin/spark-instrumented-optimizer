@@ -6,6 +6,8 @@ FLAGS = .flags
 
 .PHONY: cleanbuild cleandata cleanflags cleanvenv cleangraphs cleanall compile interactive data
 
+all: setup compile package data graphs
+
 cleanbuild:
 	$(SBT) $(SBT_FLAGS) clean
 
@@ -22,7 +24,7 @@ cleangraphs:
 	rm -rf scripts/plotting/output
 
 cleanall:
-	$(MAKE) clean cleanflags cleanvenv cleangraphs
+	$(MAKE) cleanflags cleanvenv cleangraphs cleanbuild
 
 $(FLAGS):
 	mkdir $(FLAGS)
