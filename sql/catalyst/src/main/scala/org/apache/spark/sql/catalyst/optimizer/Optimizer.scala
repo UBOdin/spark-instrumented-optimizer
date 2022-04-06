@@ -1655,32 +1655,48 @@ object EliminateSorts extends Rule[LogicalPlan] {
  * 3) by eliminating the always-true conditions given the constraints on the child's output.
  */
 object PruneFilters extends Rule[LogicalPlan] with PredicateHelper {
-  def apply(plan: LogicalPlan): LogicalPlan = plan.transformWithPruning(
-    _.containsPattern(FILTER), ruleId) {
-    // If the filter condition always evaluate to true, remove the filter.
-    case Filter(Literal(true, BooleanType), child) => child
-    // If the filter condition always evaluate to null or false,
-    // replace the input with an empty relation.
-    case Filter(Literal(null, _), child) =>
-      LocalRelation(child.output, data = Seq.empty, isStreaming = plan.isStreaming)
-    case Filter(Literal(false, BooleanType), child) =>
-      LocalRelation(child.output, data = Seq.empty, isStreaming = plan.isStreaming)
-    // If any deterministic condition is guaranteed to be true given the constraints on the child's
-    // output, remove the condition
-    case f @ Filter(fc, p: LogicalPlan) =>
-      val (prunedPredicates, remainingPredicates) =
-        splitConjunctivePredicates(fc).partition { cond =>
-          cond.deterministic && p.constraints.contains(cond)
-        }
-      if (prunedPredicates.isEmpty) {
-        f
-      } else if (remainingPredicates.isEmpty) {
-        p
-      } else {
-        val newCond = remainingPredicates.reduce(And)
-        Filter(newCond, p)
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("stopTheClock : Transform PruneFilters")
+    {
+      plan.transformWithPruning(_.containsPattern(FILTER), ruleId) {
+        // If the filter condition always evaluate to true, remove the filter.
+        case Filter(Literal(true, BooleanType), child) =>
+          CustomLogger.logMatchTime("stopTheClock : Match 1 PruneFilters", true)
+          {
+            child
+          }
+          // If the filter condition always evaluate to null or false,
+          // replace the input with an empty relation.
+        case Filter(Literal(null, _), child) =>
+          CustomLogger.logMatchTime("stopTheClock : Match 2 PruneFilters", true)
+          {
+            LocalRelation(child.output, data = Seq.empty, isStreaming = plan.isStreaming)
+          }
+        case Filter(Literal(false, BooleanType), child) =>
+          CustomLogger.logMatchTime("stopTheClock : Match 3 PruneFilters", true)
+          {
+            LocalRelation(child.output, data = Seq.empty, isStreaming = plan.isStreaming)
+          }
+          // If any deterministic condition is guaranteed to be true given the
+          // constraints on the child's output, remove the condition
+        case f @ Filter(fc, p: LogicalPlan) =>
+          CustomLogger.logMatchTime("stopTheClock : Match 4 PruneFilters", true)
+          {
+            val (prunedPredicates, remainingPredicates) =
+              splitConjunctivePredicates(fc).partition { cond =>
+                cond.deterministic && p.constraints.contains(cond)
+              }
+            if (prunedPredicates.isEmpty) {
+              f
+            } else if (remainingPredicates.isEmpty) {
+              p
+            } else {
+              val newCond = remainingPredicates.reduce(And)
+              Filter(newCond, p)
+            }
+          }
       }
-  }
+    }
 }
 
 /**
@@ -1689,12 +1705,15 @@ object PruneFilters extends Rule[LogicalPlan] with PredicateHelper {
  *  Filter-Join-Join-Join. Most predicates can be pushed down in a single pass.
  */
 object PushDownPredicates extends Rule[LogicalPlan] with PredicateHelper {
-  def apply(plan: LogicalPlan): LogicalPlan = plan.transformWithPruning(
-    _.containsAnyPattern(FILTER, JOIN)) {
-    CombineFilters.applyLocally
-      .orElse(PushPredicateThroughNonJoin.applyLocally)
-      .orElse(PushPredicateThroughJoin.applyLocally)
-  }
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("stopTheClock : Transform PushDownPredicates")
+    {
+      plan.transformWithPruning(_.containsAnyPattern(FILTER, JOIN)) {
+        CombineFilters.applyLocally
+          .orElse(PushPredicateThroughNonJoin.applyLocally)
+          .orElse(PushPredicateThroughJoin.applyLocally)
+      }
+    }
 }
 
 /**
@@ -1705,7 +1724,11 @@ object PushDownPredicates extends Rule[LogicalPlan] with PredicateHelper {
  * This heuristic is valid assuming the expression evaluation cost is minimal.
  */
 object PushPredicateThroughNonJoin extends Rule[LogicalPlan] with PredicateHelper {
-  def apply(plan: LogicalPlan): LogicalPlan = plan transform applyLocally
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("stopTheClock : Transform PushDownPredicates")
+    {
+      plan transform applyLocally
+    }
 
   val applyLocally: PartialFunction[LogicalPlan, LogicalPlan] = {
     // SPARK-13473: We can't push the predicate down when the underlying projection output non-
@@ -1716,36 +1739,42 @@ object PushPredicateThroughNonJoin extends Rule[LogicalPlan] with PredicateHelpe
     // This also applies to Aggregate.
     case Filter(condition, project @ Project(fields, grandChild))
       if fields.forall(_.deterministic) && canPushThroughCondition(grandChild, condition) =>
-      val aliasMap = getAliasMap(project)
-      project.copy(child = Filter(replaceAlias(condition, aliasMap), grandChild))
+        CustomLogger.logMatchTime("stopTheClock : Match 1 PushPredicateThroughNonJoin", true)
+        {
+          val aliasMap = getAliasMap(project)
+          project.copy(child = Filter(replaceAlias(condition, aliasMap), grandChild))
+        }
 
     case filter @ Filter(condition, aggregate: Aggregate)
-      if aggregate.aggregateExpressions.forall(_.deterministic)
-        && aggregate.groupingExpressions.nonEmpty =>
-      val aliasMap = getAliasMap(aggregate)
+    if aggregate.aggregateExpressions.forall(_.deterministic)
+      && aggregate.groupingExpressions.nonEmpty =>
+        CustomLogger.logMatchTime("stopTheClock : Match 2 PushPredicateThroughNonJoin", false)
+        {
+          val aliasMap = getAliasMap(aggregate)
 
-      // For each filter, expand the alias and check if the filter can be evaluated using
-      // attributes produced by the aggregate operator's child operator.
-      val (candidates, nonDeterministic) =
-        splitConjunctivePredicates(condition).partition(_.deterministic)
+          // For each filter, expand the alias and check if the filter can be evaluated using
+          // attributes produced by the aggregate operator's child operator.
+          val (candidates, nonDeterministic) =
+            splitConjunctivePredicates(condition).partition(_.deterministic)
 
-      val (pushDown, rest) = candidates.partition { cond =>
-        val replaced = replaceAlias(cond, aliasMap)
-        cond.references.nonEmpty && replaced.references.subsetOf(aggregate.child.outputSet)
-      }
+          val (pushDown, rest) = candidates.partition { cond =>
+            val replaced = replaceAlias(cond, aliasMap)
+            cond.references.nonEmpty && replaced.references.subsetOf(aggregate.child.outputSet)
+          }
 
-      val stayUp = rest ++ nonDeterministic
+          val stayUp = rest ++ nonDeterministic
 
-      if (pushDown.nonEmpty) {
-        val pushDownPredicate = pushDown.reduce(And)
-        val replaced = replaceAlias(pushDownPredicate, aliasMap)
-        val newAggregate = aggregate.copy(child = Filter(replaced, aggregate.child))
-        // If there is no more filter to stay up, just eliminate the filter.
-        // Otherwise, create "Filter(stayUp) <- Aggregate <- Filter(pushDownPredicate)".
-        if (stayUp.isEmpty) newAggregate else Filter(stayUp.reduce(And), newAggregate)
-      } else {
-        filter
-      }
+          if (pushDown.nonEmpty) {
+            val pushDownPredicate = pushDown.reduce(And)
+            val replaced = replaceAlias(pushDownPredicate, aliasMap)
+            val newAggregate = aggregate.copy(child = Filter(replaced, aggregate.child))
+            // If there is no more filter to stay up, just eliminate the filter.
+            // Otherwise, create "Filter(stayUp) <- Aggregate <- Filter(pushDownPredicate)".
+            if (stayUp.isEmpty) newAggregate else Filter(stayUp.reduce(And), newAggregate)
+            } else {
+              filter
+            }
+        }
 
     // Push [[Filter]] operators through [[Window]] operators. Parts of the predicate that can be
     // pushed beneath must satisfy the following conditions:
@@ -1754,70 +1783,82 @@ object PushPredicateThroughNonJoin extends Rule[LogicalPlan] with PredicateHelpe
     // 3. Placed before any non-deterministic predicates.
     case filter @ Filter(condition, w: Window)
       if w.partitionSpec.forall(_.isInstanceOf[AttributeReference]) =>
-      val partitionAttrs = AttributeSet(w.partitionSpec.flatMap(_.references))
+        CustomLogger.logMatchTime("stopTheClock : Match 3 PushPredicateThroughNonJoin", false)
+        {
+          val partitionAttrs = AttributeSet(w.partitionSpec.flatMap(_.references))
 
-      val (candidates, nonDeterministic) =
-        splitConjunctivePredicates(condition).partition(_.deterministic)
+          val (candidates, nonDeterministic) =
+            splitConjunctivePredicates(condition).partition(_.deterministic)
 
-      val (pushDown, rest) = candidates.partition { cond =>
-        cond.references.subsetOf(partitionAttrs)
-      }
+          val (pushDown, rest) = candidates.partition { cond =>
+            cond.references.subsetOf(partitionAttrs)
+          }
 
-      val stayUp = rest ++ nonDeterministic
+          val stayUp = rest ++ nonDeterministic
 
-      if (pushDown.nonEmpty) {
-        val pushDownPredicate = pushDown.reduce(And)
-        val newWindow = w.copy(child = Filter(pushDownPredicate, w.child))
-        if (stayUp.isEmpty) newWindow else Filter(stayUp.reduce(And), newWindow)
-      } else {
-        filter
-      }
+          if (pushDown.nonEmpty) {
+            val pushDownPredicate = pushDown.reduce(And)
+            val newWindow = w.copy(child = Filter(pushDownPredicate, w.child))
+            if (stayUp.isEmpty) newWindow else Filter(stayUp.reduce(And), newWindow)
+            } else {
+              filter
+            }
+        }
 
     case filter @ Filter(condition, union: Union) =>
-      // Union could change the rows, so non-deterministic predicate can't be pushed down
-      val (pushDown, stayUp) = splitConjunctivePredicates(condition).partition(_.deterministic)
+      CustomLogger.logMatchTime("stopTheClock : Match 4 PushPredicateThroughNonJoin", false)
+      {
+        // Union could change the rows, so non-deterministic predicate can't be pushed down
+        val (pushDown, stayUp) = splitConjunctivePredicates(condition).partition(_.deterministic)
 
-      if (pushDown.nonEmpty) {
-        val pushDownCond = pushDown.reduceLeft(And)
-        val output = union.output
-        val newGrandChildren = union.children.map { grandchild =>
-          val newCond = pushDownCond transform {
-            case e if output.exists(_.semanticEquals(e)) =>
-              grandchild.output(output.indexWhere(_.semanticEquals(e)))
+        if (pushDown.nonEmpty) {
+          val pushDownCond = pushDown.reduceLeft(And)
+          val output = union.output
+          val newGrandChildren = union.children.map { grandchild =>
+            val newCond = pushDownCond transform {
+              case e if output.exists(_.semanticEquals(e)) =>
+                grandchild.output(output.indexWhere(_.semanticEquals(e)))
+            }
+            assert(newCond.references.subsetOf(grandchild.outputSet))
+            Filter(newCond, grandchild)
           }
-          assert(newCond.references.subsetOf(grandchild.outputSet))
-          Filter(newCond, grandchild)
-        }
-        val newUnion = union.withNewChildren(newGrandChildren)
-        if (stayUp.nonEmpty) {
-          Filter(stayUp.reduceLeft(And), newUnion)
-        } else {
-          newUnion
-        }
-      } else {
-        filter
+          val newUnion = union.withNewChildren(newGrandChildren)
+          if (stayUp.nonEmpty) {
+            Filter(stayUp.reduceLeft(And), newUnion)
+          } else {
+            newUnion
+          }
+          } else {
+            filter
+          }
       }
 
     case filter @ Filter(condition, watermark: EventTimeWatermark) =>
-      val (pushDown, stayUp) = splitConjunctivePredicates(condition).partition { p =>
-        p.deterministic && !p.references.contains(watermark.eventTime)
-      }
+      CustomLogger.logMatchTime("stopTheClock : Match 5 PushPredicateThroughNonJoin", false)
+      {
+        val (pushDown, stayUp) = splitConjunctivePredicates(condition).partition { p =>
+          p.deterministic && !p.references.contains(watermark.eventTime)
+        }
 
-      if (pushDown.nonEmpty) {
-        val pushDownPredicate = pushDown.reduceLeft(And)
-        val newWatermark = watermark.copy(child = Filter(pushDownPredicate, watermark.child))
-        // If there is no more filter to stay up, just eliminate the filter.
-        // Otherwise, create "Filter(stayUp) <- watermark <- Filter(pushDownPredicate)".
-        if (stayUp.isEmpty) newWatermark else Filter(stayUp.reduceLeft(And), newWatermark)
-      } else {
-        filter
+        if (pushDown.nonEmpty) {
+          val pushDownPredicate = pushDown.reduceLeft(And)
+          val newWatermark = watermark.copy(child = Filter(pushDownPredicate, watermark.child))
+          // If there is no more filter to stay up, just eliminate the filter.
+          // Otherwise, create "Filter(stayUp) <- watermark <- Filter(pushDownPredicate)".
+          if (stayUp.isEmpty) newWatermark else Filter(stayUp.reduceLeft(And), newWatermark)
+          } else {
+            filter
+          }
       }
 
     case filter @ Filter(_, u: UnaryNode)
         if canPushThrough(u) && u.expressions.forall(_.deterministic) =>
-      pushDownPredicate(filter, u.child) { predicate =>
-        u.withNewChildren(Seq(Filter(predicate, u.child)))
-      }
+          CustomLogger.logMatchTime("stopTheClock : Match 6 PushPredicateThroughNonJoin", true)
+          {
+            pushDownPredicate(filter, u.child) { predicate =>
+              u.withNewChildren(Seq(Filter(predicate, u.child)))
+            }
+          }
   }
 
   def canPushThrough(p: UnaryNode): Boolean = p match {
@@ -1914,90 +1955,100 @@ object PushPredicateThroughJoin extends Rule[LogicalPlan] with PredicateHelper {
     case _ => false
   }
 
-  def apply(plan: LogicalPlan): LogicalPlan = plan transform applyLocally
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("stopTheClock : Transform PushPredicateThroughJoin")
+    {
+      plan transform applyLocally
+    }
 
   val applyLocally: PartialFunction[LogicalPlan, LogicalPlan] = {
     // push the where condition down into join filter
     case f @ Filter(filterCondition, Join(left, right, joinType, joinCondition, hint))
         if canPushThrough(joinType) =>
-      val (leftFilterConditions, rightFilterConditions, commonFilterCondition) =
-        split(splitConjunctivePredicates(filterCondition), left, right)
-      joinType match {
-        case _: InnerLike =>
-          // push down the single side `where` condition into respective sides
-          val newLeft = leftFilterConditions.
-            reduceLeftOption(And).map(Filter(_, left)).getOrElse(left)
-          val newRight = rightFilterConditions.
-            reduceLeftOption(And).map(Filter(_, right)).getOrElse(right)
-          val (newJoinConditions, others) =
-            commonFilterCondition.partition(canEvaluateWithinJoin)
-          val newJoinCond = (newJoinConditions ++ joinCondition).reduceLeftOption(And)
+          CustomLogger.logMatchTime("stopTheClock : Match 1 PushPredicateThroughJoin", false)
+          {
+            val (leftFilterConditions, rightFilterConditions, commonFilterCondition) =
+              split(splitConjunctivePredicates(filterCondition), left, right)
+            joinType match {
+              case _: InnerLike =>
+                // push down the single side `where` condition into respective sides
+                val newLeft = leftFilterConditions.
+                reduceLeftOption(And).map(Filter(_, left)).getOrElse(left)
+                val newRight = rightFilterConditions.
+                reduceLeftOption(And).map(Filter(_, right)).getOrElse(right)
+                val (newJoinConditions, others) =
+                  commonFilterCondition.partition(canEvaluateWithinJoin)
+                val newJoinCond = (newJoinConditions ++ joinCondition).reduceLeftOption(And)
 
-          val join = Join(newLeft, newRight, joinType, newJoinCond, hint)
-          if (others.nonEmpty) {
-            Filter(others.reduceLeft(And), join)
-          } else {
-            join
+                val join = Join(newLeft, newRight, joinType, newJoinCond, hint)
+                if (others.nonEmpty) {
+                  Filter(others.reduceLeft(And), join)
+                } else {
+                  join
+                }
+              case RightOuter =>
+                // push down the right side only `where` condition
+                val newLeft = left
+                val newRight = rightFilterConditions.
+                reduceLeftOption(And).map(Filter(_, right)).getOrElse(right)
+                val newJoinCond = joinCondition
+                val newJoin = Join(newLeft, newRight, RightOuter, newJoinCond, hint)
+
+                (leftFilterConditions ++ commonFilterCondition).
+                reduceLeftOption(And).map(Filter(_, newJoin)).getOrElse(newJoin)
+              case LeftOuter | LeftExistence(_) =>
+                // push down the left side only `where` condition
+                val newLeft = leftFilterConditions.
+                reduceLeftOption(And).map(Filter(_, left)).getOrElse(left)
+                val newRight = right
+                val newJoinCond = joinCondition
+                val newJoin = Join(newLeft, newRight, joinType, newJoinCond, hint)
+
+                (rightFilterConditions ++ commonFilterCondition).
+                reduceLeftOption(And).map(Filter(_, newJoin)).getOrElse(newJoin)
+
+              case other =>
+                throw new IllegalStateException(s"Unexpected join type: $other")
+            }
           }
-        case RightOuter =>
-          // push down the right side only `where` condition
-          val newLeft = left
-          val newRight = rightFilterConditions.
-            reduceLeftOption(And).map(Filter(_, right)).getOrElse(right)
-          val newJoinCond = joinCondition
-          val newJoin = Join(newLeft, newRight, RightOuter, newJoinCond, hint)
-
-          (leftFilterConditions ++ commonFilterCondition).
-            reduceLeftOption(And).map(Filter(_, newJoin)).getOrElse(newJoin)
-        case LeftOuter | LeftExistence(_) =>
-          // push down the left side only `where` condition
-          val newLeft = leftFilterConditions.
-            reduceLeftOption(And).map(Filter(_, left)).getOrElse(left)
-          val newRight = right
-          val newJoinCond = joinCondition
-          val newJoin = Join(newLeft, newRight, joinType, newJoinCond, hint)
-
-          (rightFilterConditions ++ commonFilterCondition).
-            reduceLeftOption(And).map(Filter(_, newJoin)).getOrElse(newJoin)
-
-        case other =>
-          throw new IllegalStateException(s"Unexpected join type: $other")
-      }
 
     // push down the join filter into sub query scanning if applicable
     case j @ Join(left, right, joinType, joinCondition, hint) if canPushThrough(joinType) =>
-      val (leftJoinConditions, rightJoinConditions, commonJoinCondition) =
-        split(joinCondition.map(splitConjunctivePredicates).getOrElse(Nil), left, right)
+      CustomLogger.logMatchTime("stopTheClock : Match 2 PushPredicateThroughJoin", false)
+      {
+        val (leftJoinConditions, rightJoinConditions, commonJoinCondition) =
+          split(joinCondition.map(splitConjunctivePredicates).getOrElse(Nil), left, right)
 
-      joinType match {
-        case _: InnerLike | LeftSemi =>
-          // push down the single side only join filter for both sides sub queries
-          val newLeft = leftJoinConditions.
+        joinType match {
+          case _: InnerLike | LeftSemi =>
+            // push down the single side only join filter for both sides sub queries
+            val newLeft = leftJoinConditions.
             reduceLeftOption(And).map(Filter(_, left)).getOrElse(left)
-          val newRight = rightJoinConditions.
+            val newRight = rightJoinConditions.
             reduceLeftOption(And).map(Filter(_, right)).getOrElse(right)
-          val newJoinCond = commonJoinCondition.reduceLeftOption(And)
+            val newJoinCond = commonJoinCondition.reduceLeftOption(And)
 
-          Join(newLeft, newRight, joinType, newJoinCond, hint)
-        case RightOuter =>
-          // push down the left side only join filter for left side sub query
-          val newLeft = leftJoinConditions.
+            Join(newLeft, newRight, joinType, newJoinCond, hint)
+          case RightOuter =>
+            // push down the left side only join filter for left side sub query
+            val newLeft = leftJoinConditions.
             reduceLeftOption(And).map(Filter(_, left)).getOrElse(left)
-          val newRight = right
-          val newJoinCond = (rightJoinConditions ++ commonJoinCondition).reduceLeftOption(And)
+            val newRight = right
+            val newJoinCond = (rightJoinConditions ++ commonJoinCondition).reduceLeftOption(And)
 
-          Join(newLeft, newRight, RightOuter, newJoinCond, hint)
-        case LeftOuter | LeftAnti | ExistenceJoin(_) =>
-          // push down the right side only join filter for right sub query
-          val newLeft = left
-          val newRight = rightJoinConditions.
+            Join(newLeft, newRight, RightOuter, newJoinCond, hint)
+          case LeftOuter | LeftAnti | ExistenceJoin(_) =>
+            // push down the right side only join filter for right sub query
+            val newLeft = left
+            val newRight = rightJoinConditions.
             reduceLeftOption(And).map(Filter(_, right)).getOrElse(right)
-          val newJoinCond = (leftJoinConditions ++ commonJoinCondition).reduceLeftOption(And)
+            val newJoinCond = (leftJoinConditions ++ commonJoinCondition).reduceLeftOption(And)
 
-          Join(newLeft, newRight, joinType, newJoinCond, hint)
+            Join(newLeft, newRight, joinType, newJoinCond, hint)
 
-        case other =>
-          throw new IllegalStateException(s"Unexpected join type: $other")
+          case other =>
+            throw new IllegalStateException(s"Unexpected join type: $other")
+        }
       }
   }
 }
@@ -2013,20 +2064,38 @@ object EliminateLimits extends Rule[LogicalPlan] {
     limitExpr.foldable && child.maxRows.exists { _ <= limitExpr.eval().asInstanceOf[Int] }
   }
 
-  def apply(plan: LogicalPlan): LogicalPlan = plan.transformDownWithPruning(
-    _.containsPattern(LIMIT), ruleId) {
-    case Limit(l, child) if canEliminate(l, child) =>
-      child
-    case GlobalLimit(l, child) if canEliminate(l, child) =>
-      child
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("stopTheClock : Transform EliminateLimits")
+    {
+      plan.transformDownWithPruning(_.containsPattern(LIMIT), ruleId) {
+        case Limit(l, child) if canEliminate(l, child) =>
+          CustomLogger.logMatchTime("stopTheClock : Match 1 EliminateLimits", true)
+          {
+            child
+          }
+        case GlobalLimit(l, child) if canEliminate(l, child) =>
+          CustomLogger.logMatchTime("stopTheClock : Match 2 EliminateLimits", true)
+          {
+            child
+          }
 
-    case GlobalLimit(le, GlobalLimit(ne, grandChild)) =>
-      GlobalLimit(Least(Seq(ne, le)), grandChild)
-    case LocalLimit(le, LocalLimit(ne, grandChild)) =>
-      LocalLimit(Least(Seq(ne, le)), grandChild)
-    case Limit(le, Limit(ne, grandChild)) =>
-      Limit(Least(Seq(ne, le)), grandChild)
-  }
+        case GlobalLimit(le, GlobalLimit(ne, grandChild)) =>
+          CustomLogger.logMatchTime("stopTheClock : Match 3 EliminateLimits", true)
+          {
+            GlobalLimit(Least(Seq(ne, le)), grandChild)
+          }
+        case LocalLimit(le, LocalLimit(ne, grandChild)) =>
+          CustomLogger.logMatchTime("stopTheClock : Match 4 EliminateLimits", true)
+          {
+            LocalLimit(Least(Seq(ne, le)), grandChild)
+          }
+        case Limit(le, Limit(ne, grandChild)) =>
+          CustomLogger.logMatchTime("stopTheClock : Match 4 EliminateLimits", true)
+          {
+            Limit(Least(Seq(ne, le)), grandChild)
+          }
+      }
+    }
 }
 
 /**
@@ -2059,12 +2128,18 @@ object CheckCartesianProducts extends Rule[LogicalPlan] with PredicateHelper {
   }
 
   def apply(plan: LogicalPlan): LogicalPlan =
-    if (conf.crossJoinEnabled) {
-      plan
-    } else plan.transformWithPruning(_.containsAnyPattern(INNER_LIKE_JOIN, OUTER_JOIN))  {
-      case j @ Join(left, right, Inner | LeftOuter | RightOuter | FullOuter, _, _)
-        if isCartesianProduct(j) =>
-          throw QueryCompilationErrors.joinConditionMissingOrTrivialError(j, left, right)
+    CustomLogger.logTransformTime("stopTheClock : Transform CheckCartesianProducts")
+    {
+      if (conf.crossJoinEnabled) {
+        plan
+        } else plan.transformWithPruning(_.containsAnyPattern(INNER_LIKE_JOIN, OUTER_JOIN))  {
+          case j @ Join(left, right, Inner | LeftOuter | RightOuter | FullOuter, _, _)
+          if isCartesianProduct(j) =>
+            CustomLogger.logMatchTime("stopTheClock : Match 1 EliminateUnions", true)
+            {
+              throw QueryCompilationErrors.joinConditionMissingOrTrivialError(j, left, right)
+            }
+        }
     }
 }
 
@@ -2080,38 +2155,54 @@ object DecimalAggregates extends Rule[LogicalPlan] {
   /** Maximum number of decimal digits representable precisely in a Double */
   private val MAX_DOUBLE_DIGITS = 15
 
-  def apply(plan: LogicalPlan): LogicalPlan = plan.transformWithPruning(
-    _.containsAnyPattern(SUM, AVERAGE), ruleId) {
-    case q: LogicalPlan => q.transformExpressionsDownWithPruning(
-      _.containsAnyPattern(SUM, AVERAGE), ruleId) {
-      case we @ WindowExpression(ae @ AggregateExpression(af, _, _, _, _), _) => af match {
-        case Sum(e @ DecimalType.Expression(prec, scale), _) if prec + 10 <= MAX_LONG_DIGITS =>
-          MakeDecimal(we.copy(windowFunction = ae.copy(aggregateFunction = Sum(UnscaledValue(e)))),
-            prec + 10, scale)
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("stopTheClock : Transform DecimalAggregates")
+    {
+      plan.transformWithPruning(_.containsAnyPattern(SUM, AVERAGE), ruleId) {
+        case q: LogicalPlan =>
+          CustomLogger.logMatchTime("stopTheClock : Match 1 DecimalAggregates", true)
+          {
+            q.transformExpressionsDownWithPruning(_.containsAnyPattern(SUM, AVERAGE), ruleId) {
+              case we @ WindowExpression(ae @ AggregateExpression(af, _, _, _, _), _) =>
+                af match {
+                case Sum(
+                  e @ DecimalType.Expression(prec, scale), _)if prec + 10 <= MAX_LONG_DIGITS =>
+                  MakeDecimal(
+                    we.copy(windowFunction = ae.copy(aggregateFunction = Sum(UnscaledValue(e)))),
+                    prec + 10, scale)
 
-        case Average(e @ DecimalType.Expression(prec, scale), _) if prec + 4 <= MAX_DOUBLE_DIGITS =>
-          val newAggExpr =
-            we.copy(windowFunction = ae.copy(aggregateFunction = Average(UnscaledValue(e))))
-          Cast(
-            Divide(newAggExpr, Literal.create(math.pow(10.0, scale), DoubleType)),
-            DecimalType(prec + 4, scale + 4), Option(conf.sessionLocalTimeZone))
+                  case Average(
+                    e @ DecimalType.Expression(prec, scale), _) if prec + 4 <= MAX_DOUBLE_DIGITS =>
+                    val newAggExpr =
+                      we.copy(
+                        windowFunction = ae.copy(aggregateFunction = Average(UnscaledValue(e))))
+                    Cast(
+                      Divide(newAggExpr, Literal.create(math.pow(10.0, scale), DoubleType)),
+                      DecimalType(prec + 4, scale + 4), Option(conf.sessionLocalTimeZone))
 
-        case _ => we
-      }
-      case ae @ AggregateExpression(af, _, _, _, _) => af match {
-        case Sum(e @ DecimalType.Expression(prec, scale), _) if prec + 10 <= MAX_LONG_DIGITS =>
-          MakeDecimal(ae.copy(aggregateFunction = Sum(UnscaledValue(e))), prec + 10, scale)
+                    case _ => we
+              }
+                    case ae @ AggregateExpression(af, _, _, _, _) => af match {
+                      case Sum(
+                        e @ DecimalType.Expression(
+                          prec, scale), _) if prec + 10 <= MAX_LONG_DIGITS =>
+                        MakeDecimal(
+                          ae.copy(aggregateFunction = Sum(UnscaledValue(e))), prec + 10, scale)
 
-        case Average(e @ DecimalType.Expression(prec, scale), _) if prec + 4 <= MAX_DOUBLE_DIGITS =>
-          val newAggExpr = ae.copy(aggregateFunction = Average(UnscaledValue(e)))
-          Cast(
-            Divide(newAggExpr, Literal.create(math.pow(10.0, scale), DoubleType)),
-            DecimalType(prec + 4, scale + 4), Option(conf.sessionLocalTimeZone))
+                      case Average(
+                        e @ DecimalType.Expression(
+                          prec, scale), _) if prec + 4 <= MAX_DOUBLE_DIGITS =>
+                        val newAggExpr = ae.copy(aggregateFunction = Average(UnscaledValue(e)))
+                        Cast(
+                          Divide(newAggExpr, Literal.create(math.pow(10.0, scale), DoubleType)),
+                          DecimalType(prec + 4, scale + 4), Option(conf.sessionLocalTimeZone))
 
-        case _ => ae
+                        case _ => ae
+                    }
+            }
+          }
       }
     }
-  }
 }
 
 /**
@@ -2119,23 +2210,36 @@ object DecimalAggregates extends Rule[LogicalPlan] {
  * another `LocalRelation`.
  */
 object ConvertToLocalRelation extends Rule[LogicalPlan] {
-  def apply(plan: LogicalPlan): LogicalPlan = plan.transformWithPruning(
-    _.containsPattern(LOCAL_RELATION), ruleId) {
-    case Project(projectList, LocalRelation(output, data, isStreaming))
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("stopTheClock : Transform ConvertToLocalRelation")
+    {
+      plan.transformWithPruning(_.containsPattern(LOCAL_RELATION), ruleId) {
+        case Project(projectList, LocalRelation(output, data, isStreaming))
         if !projectList.exists(hasUnevaluableExpr) =>
-      val projection = new InterpretedMutableProjection(projectList, output)
-      projection.initialize(0)
-      LocalRelation(projectList.map(_.toAttribute), data.map(projection(_).copy()), isStreaming)
+          CustomLogger.logMatchTime("stopTheClock : Match 1 ConvertToLocalRelation", true)
+          {
+            val projection = new InterpretedMutableProjection(projectList, output)
+            projection.initialize(0)
+            LocalRelation(projectList.map(
+              _.toAttribute), data.map(projection(_).copy()), isStreaming)
+          }
 
-    case Limit(IntegerLiteral(limit), LocalRelation(output, data, isStreaming)) =>
-      LocalRelation(output, data.take(limit), isStreaming)
+        case Limit(IntegerLiteral(limit), LocalRelation(output, data, isStreaming)) =>
+          CustomLogger.logMatchTime("stopTheClock : Match 2 ConvertToLocalRelation", true)
+          {
+            LocalRelation(output, data.take(limit), isStreaming)
+          }
 
-    case Filter(condition, LocalRelation(output, data, isStreaming))
+        case Filter(condition, LocalRelation(output, data, isStreaming))
         if !hasUnevaluableExpr(condition) =>
-      val predicate = Predicate.create(condition, output)
-      predicate.initialize(0)
-      LocalRelation(output, data.filter(row => predicate.eval(row)), isStreaming)
-  }
+          CustomLogger.logMatchTime("stopTheClock : Match 3 ConvertToLocalRelation", true)
+          {
+            val predicate = Predicate.create(condition, output)
+            predicate.initialize(0)
+            LocalRelation(output, data.filter(row => predicate.eval(row)), isStreaming)
+          }
+      }
+    }
 
   private def hasUnevaluableExpr(expr: Expression): Boolean = {
     expr.find(e => e.isInstanceOf[Unevaluable] && !e.isInstanceOf[AttributeReference]).isDefined
@@ -2149,36 +2253,51 @@ object ConvertToLocalRelation extends Rule[LogicalPlan] {
  * }}}
  */
 object ReplaceDistinctWithAggregate extends Rule[LogicalPlan] {
-  def apply(plan: LogicalPlan): LogicalPlan = plan.transformWithPruning(
-    _.containsPattern(DISTINCT_LIKE), ruleId) {
-    case Distinct(child) => Aggregate(child.output, child.output, child)
-  }
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("stopTheClock : Transform ReplaceDistinctWithAggregate")
+    {
+      plan.transformWithPruning(_.containsPattern(DISTINCT_LIKE), ruleId) {
+        case Distinct(child) =>
+          CustomLogger.logMatchTime("stopTheClock : Match 1 ReplaceDistinctWithAggregate", true)
+          {
+            Aggregate(child.output, child.output, child)
+          }
+      }
+    }
 }
 
 /**
  * Replaces logical [[Deduplicate]] operator with an [[Aggregate]] operator.
  */
 object ReplaceDeduplicateWithAggregate extends Rule[LogicalPlan] {
-  def apply(plan: LogicalPlan): LogicalPlan = plan transformUpWithNewOutput {
-    case d @ Deduplicate(keys, child) if !child.isStreaming =>
-      val keyExprIds = keys.map(_.exprId)
-      val aggCols = child.output.map { attr =>
-        if (keyExprIds.contains(attr.exprId)) {
-          attr
-        } else {
-          Alias(new First(attr).toAggregateExpression(), attr.name)()
-        }
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("stopTheClock : ReplaceDeduplicateWithAggregate")
+    {
+      plan transformUpWithNewOutput {
+        case d @ Deduplicate(keys, child) if !child.isStreaming =>
+          CustomLogger.logMatchTime("stopTheClock : Match 1 ReplaceDeduplicateWithAggregate", true)
+          {
+            val keyExprIds = keys.map(_.exprId)
+            val aggCols = child.output.map { attr =>
+              if (keyExprIds.contains(attr.exprId)) {
+                attr
+              } else {
+                Alias(new First(attr).toAggregateExpression(), attr.name)()
+              }
+            }
+            // SPARK-22951: Physical aggregate operators distinguishes global aggregation and
+            // grouping aggregations by checking the number of grouping keys.
+            // The key difference here is that a global aggregation always returns at least
+            // one row even if there are no input rows. Here we append a literal when the
+            // grouping key list is empty so that the result aggregate operator is properly
+            // treated as a grouping aggregation.
+            val nonemptyKeys = if (keys.isEmpty) Literal(1) :: Nil else keys
+            val newAgg = Aggregate(nonemptyKeys, aggCols, child)
+            val attrMapping = d.output.zip(newAgg.output)
+            newAgg -> attrMapping
+          }
       }
-      // SPARK-22951: Physical aggregate operators distinguishes global aggregation and grouping
-      // aggregations by checking the number of grouping keys. The key difference here is that a
-      // global aggregation always returns at least one row even if there are no input rows. Here
-      // we append a literal when the grouping key list is empty so that the result aggregate
-      // operator is properly treated as a grouping aggregation.
-      val nonemptyKeys = if (keys.isEmpty) Literal(1) :: Nil else keys
-      val newAgg = Aggregate(nonemptyKeys, aggCols, child)
-      val attrMapping = d.output.zip(newAgg.output)
-      newAgg -> attrMapping
-  }
+    }
 }
 
 /**
@@ -2194,13 +2313,19 @@ object ReplaceDeduplicateWithAggregate extends Rule[LogicalPlan] {
  *    join conditions will be incorrect.
  */
 object ReplaceIntersectWithSemiJoin extends Rule[LogicalPlan] {
-  def apply(plan: LogicalPlan): LogicalPlan = plan.transformWithPruning(
-    _.containsPattern(INTERSECT), ruleId) {
-    case Intersect(left, right, false) =>
-      assert(left.output.size == right.output.size)
-      val joinCond = left.output.zip(right.output).map { case (l, r) => EqualNullSafe(l, r) }
-      Distinct(Join(left, right, LeftSemi, joinCond.reduceLeftOption(And), JoinHint.NONE))
-  }
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("stopTheClock : Transform ReplaceIntersectWithSemiJoin")
+    {
+      plan.transformWithPruning(_.containsPattern(INTERSECT), ruleId) {
+        case Intersect(left, right, false) =>
+          CustomLogger.logMatchTime("stopTheClock : Match 1 ReplaceIntersectWithSemiJoin", true)
+          {
+            assert(left.output.size == right.output.size)
+            val joinCond = left.output.zip(right.output).map { case (l, r) => EqualNullSafe(l, r) }
+            Distinct(Join(left, right, LeftSemi, joinCond.reduceLeftOption(And), JoinHint.NONE))
+          }
+      }
+    }
 }
 
 /**
@@ -2216,13 +2341,19 @@ object ReplaceIntersectWithSemiJoin extends Rule[LogicalPlan] {
  *    join conditions will be incorrect.
  */
 object ReplaceExceptWithAntiJoin extends Rule[LogicalPlan] {
-  def apply(plan: LogicalPlan): LogicalPlan = plan.transformWithPruning(
-    _.containsPattern(EXCEPT), ruleId) {
-    case Except(left, right, false) =>
-      assert(left.output.size == right.output.size)
-      val joinCond = left.output.zip(right.output).map { case (l, r) => EqualNullSafe(l, r) }
-      Distinct(Join(left, right, LeftAnti, joinCond.reduceLeftOption(And), JoinHint.NONE))
-  }
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("stopTheClock : Transform ReplaceExceptWithAntiJoin")
+    {
+      plan.transformWithPruning(_.containsPattern(EXCEPT), ruleId) {
+        case Except(left, right, false) =>
+          CustomLogger.logMatchTime("stopTheClock : Match 1 ReplaceExceptWithAntiJoin", true)
+          {
+            assert(left.output.size == right.output.size)
+            val joinCond = left.output.zip(right.output).map { case (l, r) => EqualNullSafe(l, r) }
+            Distinct(Join(left, right, LeftAnti, joinCond.reduceLeftOption(And), JoinHint.NONE))
+          }
+      }
+    }
 }
 
 /**
@@ -2257,31 +2388,39 @@ object ReplaceExceptWithAntiJoin extends Rule[LogicalPlan] {
  */
 
 object RewriteExceptAll extends Rule[LogicalPlan] {
-  def apply(plan: LogicalPlan): LogicalPlan = plan.transformWithPruning(
-    _.containsPattern(EXCEPT), ruleId) {
-    case Except(left, right, true) =>
-      assert(left.output.size == right.output.size)
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("stopTheClock : Transform RewriteExceptAll")
+    {
+      plan.transformWithPruning(_.containsPattern(EXCEPT), ruleId) {
+        case Except(left, right, true) =>
+          CustomLogger.logMatchTime("stopTheClock : Match 1 RewriteExceptAll", true)
+          {
+            assert(left.output.size == right.output.size)
 
-      val newColumnLeft = Alias(Literal(1L), "vcol")()
-      val newColumnRight = Alias(Literal(-1L), "vcol")()
-      val modifiedLeftPlan = Project(Seq(newColumnLeft) ++ left.output, left)
-      val modifiedRightPlan = Project(Seq(newColumnRight) ++ right.output, right)
-      val unionPlan = Union(modifiedLeftPlan, modifiedRightPlan)
-      val aggSumCol =
-        Alias(AggregateExpression(Sum(unionPlan.output.head.toAttribute), Complete, false), "sum")()
-      val aggOutputColumns = left.output ++ Seq(aggSumCol)
-      val aggregatePlan = Aggregate(left.output, aggOutputColumns, unionPlan)
-      val filteredAggPlan = Filter(GreaterThan(aggSumCol.toAttribute, Literal(0L)), aggregatePlan)
-      val genRowPlan = Generate(
-        ReplicateRows(Seq(aggSumCol.toAttribute) ++ left.output),
-        unrequiredChildIndex = Nil,
-        outer = false,
-        qualifier = None,
-        left.output,
-        filteredAggPlan
-      )
-      Project(left.output, genRowPlan)
-  }
+            val newColumnLeft = Alias(Literal(1L), "vcol")()
+            val newColumnRight = Alias(Literal(-1L), "vcol")()
+            val modifiedLeftPlan = Project(Seq(newColumnLeft) ++ left.output, left)
+            val modifiedRightPlan = Project(Seq(newColumnRight) ++ right.output, right)
+            val unionPlan = Union(modifiedLeftPlan, modifiedRightPlan)
+            val aggSumCol =
+              Alias(AggregateExpression(Sum(
+                unionPlan.output.head.toAttribute), Complete, false), "sum")()
+            val aggOutputColumns = left.output ++ Seq(aggSumCol)
+            val aggregatePlan = Aggregate(left.output, aggOutputColumns, unionPlan)
+            val filteredAggPlan = Filter(
+              GreaterThan(aggSumCol.toAttribute, Literal(0L)), aggregatePlan)
+            val genRowPlan = Generate(
+              ReplicateRows(Seq(aggSumCol.toAttribute) ++ left.output),
+              unrequiredChildIndex = Nil,
+              outer = false,
+              qualifier = None,
+              left.output,
+              filteredAggPlan
+            )
+            Project(left.output, genRowPlan)
+          }
+      }
+    }
 }
 
 /**
@@ -2315,52 +2454,62 @@ object RewriteExceptAll extends Rule[LogicalPlan] {
  * }}}
  */
 object RewriteIntersectAll extends Rule[LogicalPlan] {
-  def apply(plan: LogicalPlan): LogicalPlan = plan.transformWithPruning(
-    _.containsPattern(INTERSECT), ruleId) {
-    case Intersect(left, right, true) =>
-      assert(left.output.size == right.output.size)
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("stopTheClock : RewriteIntersectAll")
+    {
+      plan.transformWithPruning(_.containsPattern(INTERSECT), ruleId) {
+        case Intersect(left, right, true) =>
+          CustomLogger.logMatchTime("stopTheClock : Match 1 RewriteIntersectAll", true)
+          {
+            assert(left.output.size == right.output.size)
 
-      val trueVcol1 = Alias(Literal(true), "vcol1")()
-      val nullVcol1 = Alias(Literal(null, BooleanType), "vcol1")()
+            val trueVcol1 = Alias(Literal(true), "vcol1")()
+            val nullVcol1 = Alias(Literal(null, BooleanType), "vcol1")()
 
-      val trueVcol2 = Alias(Literal(true), "vcol2")()
-      val nullVcol2 = Alias(Literal(null, BooleanType), "vcol2")()
+            val trueVcol2 = Alias(Literal(true), "vcol2")()
+            val nullVcol2 = Alias(Literal(null, BooleanType), "vcol2")()
 
-      // Add a projection on the top of left and right plans to project out
-      // the additional virtual columns.
-      val leftPlanWithAddedVirtualCols = Project(Seq(trueVcol1, nullVcol2) ++ left.output, left)
-      val rightPlanWithAddedVirtualCols = Project(Seq(nullVcol1, trueVcol2) ++ right.output, right)
+            // Add a projection on the top of left and right plans to project out
+            // the additional virtual columns.
+            val leftPlanWithAddedVirtualCols = Project(
+              Seq(trueVcol1, nullVcol2) ++ left.output, left)
+            val rightPlanWithAddedVirtualCols = Project(
+              Seq(nullVcol1, trueVcol2) ++ right.output, right)
 
-      val unionPlan = Union(leftPlanWithAddedVirtualCols, rightPlanWithAddedVirtualCols)
+            val unionPlan = Union(leftPlanWithAddedVirtualCols, rightPlanWithAddedVirtualCols)
 
-      // Expressions to compute count and minimum of both the counts.
-      val vCol1AggrExpr =
-        Alias(AggregateExpression(Count(unionPlan.output(0)), Complete, false), "vcol1_count")()
-      val vCol2AggrExpr =
-        Alias(AggregateExpression(Count(unionPlan.output(1)), Complete, false), "vcol2_count")()
-      val ifExpression = Alias(If(
-        GreaterThan(vCol1AggrExpr.toAttribute, vCol2AggrExpr.toAttribute),
-        vCol2AggrExpr.toAttribute,
-        vCol1AggrExpr.toAttribute
-      ), "min_count")()
+            // Expressions to compute count and minimum of both the counts.
+            val vCol1AggrExpr =
+              Alias(AggregateExpression(
+                Count(unionPlan.output(0)), Complete, false), "vcol1_count")()
+            val vCol2AggrExpr =
+              Alias(AggregateExpression(
+                Count(unionPlan.output(1)), Complete, false), "vcol2_count")()
+            val ifExpression = Alias(If(
+              GreaterThan(vCol1AggrExpr.toAttribute, vCol2AggrExpr.toAttribute),
+              vCol2AggrExpr.toAttribute,
+              vCol1AggrExpr.toAttribute
+            ), "min_count")()
 
-      val aggregatePlan = Aggregate(left.output,
-        Seq(vCol1AggrExpr, vCol2AggrExpr) ++ left.output, unionPlan)
-      val filterPlan = Filter(And(GreaterThanOrEqual(vCol1AggrExpr.toAttribute, Literal(1L)),
-        GreaterThanOrEqual(vCol2AggrExpr.toAttribute, Literal(1L))), aggregatePlan)
-      val projectMinPlan = Project(left.output ++ Seq(ifExpression), filterPlan)
+            val aggregatePlan = Aggregate(left.output,
+              Seq(vCol1AggrExpr, vCol2AggrExpr) ++ left.output, unionPlan)
+            val filterPlan = Filter(And(GreaterThanOrEqual(vCol1AggrExpr.toAttribute, Literal(1L)),
+              GreaterThanOrEqual(vCol2AggrExpr.toAttribute, Literal(1L))), aggregatePlan)
+            val projectMinPlan = Project(left.output ++ Seq(ifExpression), filterPlan)
 
-      // Apply the replicator to replicate rows based on min_count
-      val genRowPlan = Generate(
-        ReplicateRows(Seq(ifExpression.toAttribute) ++ left.output),
-        unrequiredChildIndex = Nil,
-        outer = false,
-        qualifier = None,
-        left.output,
-        projectMinPlan
-      )
-      Project(left.output, genRowPlan)
-  }
+            // Apply the replicator to replicate rows based on min_count
+            val genRowPlan = Generate(
+              ReplicateRows(Seq(ifExpression.toAttribute) ++ left.output),
+              unrequiredChildIndex = Nil,
+              outer = false,
+              qualifier = None,
+              left.output,
+              projectMinPlan
+            )
+            Project(left.output, genRowPlan)
+          }
+      }
+    }
 }
 
 /**
@@ -2368,19 +2517,28 @@ object RewriteIntersectAll extends Rule[LogicalPlan] {
  * but only makes the grouping key bigger.
  */
 object RemoveLiteralFromGroupExpressions extends Rule[LogicalPlan] {
-  def apply(plan: LogicalPlan): LogicalPlan = plan.transformWithPruning(
-    _.containsPattern(AGGREGATE), ruleId) {
-    case a @ Aggregate(grouping, _, _) if grouping.nonEmpty =>
-      val newGrouping = grouping.filter(!_.foldable)
-      if (newGrouping.nonEmpty) {
-        a.copy(groupingExpressions = newGrouping)
-      } else {
-        // All grouping expressions are literals. We should not drop them all, because this can
-        // change the return semantics when the input of the Aggregate is empty (SPARK-17114). We
-        // instead replace this by single, easy to hash/sort, literal expression.
-        a.copy(groupingExpressions = Seq(Literal(0, IntegerType)))
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("stopTheClock : Transform RemoveLiteralFromGroupExpressions")
+    {
+      plan.transformWithPruning(_.containsPattern(AGGREGATE), ruleId) {
+        case a @ Aggregate(grouping, _, _) if grouping.nonEmpty =>
+          CustomLogger.logMatchTime(
+            "stopTheClock : Match 1 RemoveLiteralFromGroupExpressions", true)
+            {
+
+              val newGrouping = grouping.filter(!_.foldable)
+              if (newGrouping.nonEmpty) {
+                a.copy(groupingExpressions = newGrouping)
+              } else {
+                // All grouping expressions are literals. We should not drop them all,
+                // because this can change the return semantics when the input of the
+                // Aggregate is empty (SPARK-17114). We instead replace this by single,
+                // easy to hash/sort, literal expression.
+                a.copy(groupingExpressions = Seq(Literal(0, IntegerType)))
+              }
+            }
       }
-  }
+    }
 }
 
 /**
@@ -2388,16 +2546,23 @@ object RemoveLiteralFromGroupExpressions extends Rule[LogicalPlan] {
  * but only makes the grouping key bigger.
  */
 object RemoveRepetitionFromGroupExpressions extends Rule[LogicalPlan] {
-  def apply(plan: LogicalPlan): LogicalPlan = plan.transformWithPruning(
-    _.containsPattern(AGGREGATE), ruleId) {
-    case a @ Aggregate(grouping, _, _) if grouping.size > 1 =>
-      val newGrouping = ExpressionSet(grouping).toSeq
-      if (newGrouping.size == grouping.size) {
-        a
-      } else {
-        a.copy(groupingExpressions = newGrouping)
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("stopTheClock : RemoveRepetitionFromGroupExpressions")
+    {
+      plan.transformWithPruning(_.containsPattern(AGGREGATE), ruleId) {
+        case a @ Aggregate(grouping, _, _) if grouping.size > 1 =>
+          CustomLogger.logMatchTime(
+            "stopTheClock : Match 1 RemoveRepetitionFromGroupExpressions", true)
+            {
+              val newGrouping = ExpressionSet(grouping).toSeq
+              if (newGrouping.size == grouping.size) {
+                a
+              } else {
+                a.copy(groupingExpressions = newGrouping)
+              }
+            }
       }
-  }
+    }
 }
 
 /**
@@ -2409,28 +2574,37 @@ object OptimizeLimitZero extends Rule[LogicalPlan] {
   private def empty(plan: LogicalPlan) =
     LocalRelation(plan.output, data = Seq.empty, isStreaming = plan.isStreaming)
 
-  def apply(plan: LogicalPlan): LogicalPlan = plan.transformUpWithPruning(
-    _.containsAllPatterns(LIMIT, LITERAL)) {
-    // Nodes below GlobalLimit or LocalLimit can be pruned if the limit value is zero (0).
-    // Any subtree in the logical plan that has GlobalLimit 0 or LocalLimit 0 as its root is
-    // semantically equivalent to an empty relation.
-    //
-    // In such cases, the effects of Limit 0 can be propagated through the Logical Plan by replacing
-    // the (Global/Local) Limit subtree with an empty LocalRelation, thereby pruning the subtree
-    // below and triggering other optimization rules of PropagateEmptyRelation to propagate the
-    // changes up the Logical Plan.
-    //
-    // Replace Global Limit 0 nodes with empty Local Relation
-    case gl @ GlobalLimit(IntegerLiteral(0), _) =>
-      empty(gl)
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("stopTheClock : Transform OptimizeLimitZero")
+    {
+      plan.transformUpWithPruning(_.containsAllPatterns(LIMIT, LITERAL)) {
+        // Nodes below GlobalLimit or LocalLimit can be pruned if the limit value is zero (0).
+        // Any subtree in the logical plan that has GlobalLimit 0 or LocalLimit 0 as its root is
+        // semantically equivalent to an empty relation.
+        //
+        // In such cases, the effects of Limit 0 can be propagated through the Logical Plan by
+        // replacing the (Global/Local) Limit subtree with an empty LocalRelation, thereby pruning
+        // the subtree below and triggering other optimization rules of PropagateEmptyRelation to
+        // propagate the changes up the Logical Plan.
+        //
+        // Replace Global Limit 0 nodes with empty Local Relation
+        case gl @ GlobalLimit(IntegerLiteral(0), _) =>
+          CustomLogger.logMatchTime("stopTheClock : Match 1 OptimizeLimitZero", true)
+          {
+            empty(gl)
+          }
 
-    // Note: For all SQL queries, if a LocalLimit 0 node exists in the Logical Plan, then a
-    // GlobalLimit 0 node would also exist. Thus, the above case would be sufficient to handle
-    // almost all cases. However, if a user explicitly creates a Logical Plan with LocalLimit 0 node
-    // then the following rule will handle that case as well.
-    //
-    // Replace Local Limit 0 nodes with empty Local Relation
-    case ll @ LocalLimit(IntegerLiteral(0), _) =>
-      empty(ll)
-  }
+          // Note: For all SQL queries, if a LocalLimit 0 node exists in the Logical Plan, then a
+          // GlobalLimit 0 node would also exist. Thus, the above case would be sufficient to
+          // handle almost all cases. However, if a user explicitly creates a Logical Plan with
+          // LocalLimit 0 node then the following rule will handle that case as well.
+          //
+          // Replace Local Limit 0 nodes with empty Local Relation
+        case ll @ LocalLimit(IntegerLiteral(0), _) =>
+          CustomLogger.logMatchTime("stopTheClock : Match 2 OptimizeLimitZero", true)
+          {
+            empty(ll)
+          }
+      }
+    }
 }
