@@ -186,94 +186,95 @@ abstract class RuleExecutor[TreeType <: TreeNode[_]] extends Logging {
    * using the defined execution strategy. Within each batch, rules are also executed serially.
    */
   def execute(plan: TreeType): TreeType = {
-    CustomLogger.logExecutionTime("stopTheClock : Execution called.") {
-    var curPlan = plan
-    val queryExecutionMetrics = RuleExecutor.queryExecutionMeter
-    val planChangeLogger = new PlanChangeLogger[TreeType]()
-    val tracker: Option[QueryPlanningTracker] = QueryPlanningTracker.get
-    val beforeMetrics = RuleExecutor.getCurrentMetrics()
+    CustomLogger.logExecutionTime("stopTheClock : Execution called.")
+    {
+      var curPlan = plan
+      val queryExecutionMetrics = RuleExecutor.queryExecutionMeter
+      val planChangeLogger = new PlanChangeLogger[TreeType]()
+      val tracker: Option[QueryPlanningTracker] = QueryPlanningTracker.get
+      val beforeMetrics = RuleExecutor.getCurrentMetrics()
 
-    // Run the structural integrity checker against the initial input
-    if (!isPlanIntegral(plan, plan)) {
-      throw QueryExecutionErrors.structuralIntegrityOfInputPlanIsBrokenInClassError(
-        this.getClass.getName.stripSuffix("$"))
-    }
-
-    batches.foreach { batch =>
-      val batchStartPlan = curPlan
-      var iteration = 1
-      var lastPlan = curPlan
-      var continue = true
-
-      // Run until fix point (or the max number of iterations as specified in the strategy.
-      while (continue) {
-        curPlan = batch.rules.foldLeft(curPlan) {
-          case (plan, rule) =>
-            CustomLogger.pushCounterStacks(rule.ruleName)
-            val startTime = System.nanoTime()
-            val result = rule(plan)
-            val runTime = System.nanoTime() - startTime
-            val effective = !result.fastEquals(plan)
-            CustomLogger.popCounterStacks(effective, rule.ruleName)
-            if (effective) {
-              // scalastyle:off
-              CustomLogger.logEffectiveRulesAsSet(rule.ruleName)
-              // scalastyle:on
-              queryExecutionMetrics.incNumEffectiveExecution(rule.ruleName)
-              queryExecutionMetrics.incTimeEffectiveExecutionBy(rule.ruleName, runTime)
-              planChangeLogger.logRule(rule.ruleName, plan, result)
-            }
-            queryExecutionMetrics.incExecutionTimeBy(rule.ruleName, runTime)
-            queryExecutionMetrics.incNumExecution(rule.ruleName)
-
-            // Record timing information using QueryPlanningTracker
-            tracker.foreach(_.recordRuleInvocation(rule.ruleName, runTime, effective))
-
-            // Run the structural integrity checker against the plan after each rule.
-            if (effective && !isPlanIntegral(plan, result)) {
-              throw QueryExecutionErrors.structuralIntegrityIsBrokenAfterApplyingRuleError(
-                rule.ruleName, batch.name)
-            }
-
-            result
-        }
-        iteration += 1
-        if (iteration > batch.strategy.maxIterations) {
-          // Only log if this is a rule that is supposed to run more than once.
-          if (iteration != 2) {
-            val endingMsg = if (batch.strategy.maxIterationsSetting == null) {
-              "."
-            } else {
-              s", please set '${batch.strategy.maxIterationsSetting}' to a larger value."
-            }
-            val message = s"Max iterations (${iteration - 1}) reached for batch ${batch.name}" +
-              s"$endingMsg"
-            if (Utils.isTesting || batch.strategy.errorOnExceed) {
-              throw new RuntimeException(message)
-            } else {
-              logWarning(message)
-            }
-          }
-          // Check idempotence for Once batches.
-          if (batch.strategy == Once &&
-            Utils.isTesting && !excludedOnceBatches.contains(batch.name)) {
-            checkBatchIdempotence(batch, curPlan)
-          }
-          continue = false
-        }
-
-        if (curPlan.fastEquals(lastPlan)) {
-          logTrace(
-            s"Fixed point reached for batch ${batch.name} after ${iteration - 1} iterations.")
-          continue = false
-        }
-        lastPlan = curPlan
+      // Run the structural integrity checker against the initial input
+      if (!isPlanIntegral(plan, plan)) {
+        throw QueryExecutionErrors.structuralIntegrityOfInputPlanIsBrokenInClassError(
+          this.getClass.getName.stripSuffix("$"))
       }
 
-      planChangeLogger.logBatch(batch.name, batchStartPlan, curPlan)
-    }
-    planChangeLogger.logMetrics(RuleExecutor.getCurrentMetrics() - beforeMetrics)
+      batches.foreach { batch =>
+        val batchStartPlan = curPlan
+        var iteration = 1
+        var lastPlan = curPlan
+        var continue = true
 
-    curPlan
+        // Run until fix point (or the max number of iterations as specified in the strategy.
+        while (continue) {
+          curPlan = batch.rules.foldLeft(curPlan) {
+            case (plan, rule) =>
+              CustomLogger.pushCounterStacks(rule.ruleName)
+              val startTime = System.nanoTime()
+              val result = rule(plan)
+              val runTime = System.nanoTime() - startTime
+              val effective = !result.fastEquals(plan)
+              CustomLogger.popCounterStacks(effective, rule.ruleName)
+              if (effective) {
+                // scalastyle:off
+                CustomLogger.logEffectiveRulesAsSet(rule.ruleName)
+                // scalastyle:on
+                queryExecutionMetrics.incNumEffectiveExecution(rule.ruleName)
+                queryExecutionMetrics.incTimeEffectiveExecutionBy(rule.ruleName, runTime)
+                planChangeLogger.logRule(rule.ruleName, plan, result)
+              }
+              queryExecutionMetrics.incExecutionTimeBy(rule.ruleName, runTime)
+              queryExecutionMetrics.incNumExecution(rule.ruleName)
+
+              // Record timing information using QueryPlanningTracker
+              tracker.foreach(_.recordRuleInvocation(rule.ruleName, runTime, effective))
+
+              // Run the structural integrity checker against the plan after each rule.
+              if (effective && !isPlanIntegral(plan, result)) {
+                throw QueryExecutionErrors.structuralIntegrityIsBrokenAfterApplyingRuleError(
+                  rule.ruleName, batch.name)
+              }
+
+              result
+          }
+          iteration += 1
+          if (iteration > batch.strategy.maxIterations) {
+            // Only log if this is a rule that is supposed to run more than once.
+            if (iteration != 2) {
+              val endingMsg = if (batch.strategy.maxIterationsSetting == null) {
+                "."
+              } else {
+                s", please set '${batch.strategy.maxIterationsSetting}' to a larger value."
+              }
+              val message = s"Max iterations (${iteration - 1}) reached for batch ${batch.name}" +
+              s"$endingMsg"
+              if (Utils.isTesting || batch.strategy.errorOnExceed) {
+                throw new RuntimeException(message)
+              } else {
+                logWarning(message)
+              }
+            }
+            // Check idempotence for Once batches.
+            if (batch.strategy == Once &&
+              Utils.isTesting && !excludedOnceBatches.contains(batch.name)) {
+                checkBatchIdempotence(batch, curPlan)
+              }
+              continue = false
+          }
+
+          if (curPlan.fastEquals(lastPlan)) {
+            logTrace(
+              s"Fixed point reached for batch ${batch.name} after ${iteration - 1} iterations.")
+            continue = false
+          }
+          lastPlan = curPlan
+        }
+
+        planChangeLogger.logBatch(batch.name, batchStartPlan, curPlan)
+      }
+      planChangeLogger.logMetrics(RuleExecutor.getCurrentMetrics() - beforeMetrics)
+
+      curPlan
   }}
 }
