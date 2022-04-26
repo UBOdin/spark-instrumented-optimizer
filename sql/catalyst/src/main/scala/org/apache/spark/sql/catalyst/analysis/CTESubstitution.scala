@@ -19,6 +19,7 @@ package org.apache.spark.sql.catalyst.analysis
 
 import scala.collection.mutable
 
+import org.apache.spark.sql.catalyst.CustomLogger
 import org.apache.spark.sql.catalyst.expressions.SubqueryExpression
 import org.apache.spark.sql.catalyst.plans.logical.{Command, CTERelationDef, CTERelationRef, InsertIntoDir, LogicalPlan, ParsedStatement, SubqueryAlias, UnresolvedWith, WithCTE}
 import org.apache.spark.sql.catalyst.rules.Rule
@@ -47,35 +48,48 @@ import org.apache.spark.sql.internal.SQLConf.{LEGACY_CTE_PRECEDENCE_POLICY, Lega
  * analysis exception will be thrown later by relation resolving rules.
  */
 object CTESubstitution extends Rule[LogicalPlan] {
-  def apply(plan: LogicalPlan): LogicalPlan = {
-    val isCommand = plan.find {
-      case _: Command | _: ParsedStatement | _: InsertIntoDir => true
-      case _ => false
-    }.isDefined
-    val cteDefs = mutable.ArrayBuffer.empty[CTERelationDef]
-    val (substituted, lastSubstituted) =
-      LegacyBehaviorPolicy.withName(conf.getConf(LEGACY_CTE_PRECEDENCE_POLICY)) match {
-        case LegacyBehaviorPolicy.EXCEPTION =>
-          assertNoNameConflictsInCTE(plan)
-          traverseAndSubstituteCTE(plan, isCommand, cteDefs)
-        case LegacyBehaviorPolicy.LEGACY =>
-          (legacyTraverseAndSubstituteCTE(plan, cteDefs), None)
-        case LegacyBehaviorPolicy.CORRECTED =>
-          traverseAndSubstituteCTE(plan, isCommand, cteDefs)
-    }
-    if (cteDefs.isEmpty) {
-      substituted
-    } else if (substituted eq lastSubstituted.get) {
-      WithCTE(substituted, cteDefs.toSeq)
-    } else {
-      var done = false
-      substituted.resolveOperatorsWithPruning(_ => !done) {
-        case p if p eq lastSubstituted.get =>
-          done = true
-          WithCTE(p, cteDefs.toSeq)
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("stopTheClock : Transform CTESubstitution")
+    {
+      {
+        val isCommand = plan.find {
+          case _: Command | _: ParsedStatement | _: InsertIntoDir => true
+          case _ => false
+        }.isDefined
+        val cteDefs = mutable.ArrayBuffer.empty[CTERelationDef]
+        val (substituted, lastSubstituted) =
+          LegacyBehaviorPolicy.withName(conf.getConf(LEGACY_CTE_PRECEDENCE_POLICY)) match {
+            case LegacyBehaviorPolicy.EXCEPTION =>
+              CustomLogger.logMatchTime("stopTheClock : Match 1 CTESubstitution", true)
+              {
+                assertNoNameConflictsInCTE(plan)
+                traverseAndSubstituteCTE(plan, isCommand, cteDefs)
+              }
+            case LegacyBehaviorPolicy.LEGACY =>
+              CustomLogger.logMatchTime("stopTheClock : Match 2 CTESubstitution", true)
+              {
+                (legacyTraverseAndSubstituteCTE(plan, cteDefs), None)
+              }
+            case LegacyBehaviorPolicy.CORRECTED =>
+              CustomLogger.logMatchTime("stopTheClock : Match 3 CTESubstitution", true)
+              {
+                traverseAndSubstituteCTE(plan, isCommand, cteDefs)
+              }
+          }
+        if (cteDefs.isEmpty) {
+          substituted
+        } else if (substituted eq lastSubstituted.get) {
+          WithCTE(substituted, cteDefs.toSeq)
+        } else {
+          var done = false
+          substituted.resolveOperatorsWithPruning(_ => !done) {
+            case p if p eq lastSubstituted.get =>
+              done = true
+              WithCTE(p, cteDefs.toSeq)
+          }
+        }
       }
     }
-  }
 
   /**
    * Spark 3.0 changes the CTE relations resolution, and inner relations take precedence. This is
