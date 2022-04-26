@@ -44,6 +44,8 @@ object CustomLogger {
   var runningRewriteTimeEffective: Long = 0
   var runningRewriteTimeInEffective: Long = 0
 
+  var runningApplyTime: Long = 0
+
   var allRulesSet: Set[String] = Set()
   var effectiveRuleSet: Set[String] = Set()
 
@@ -94,6 +96,8 @@ object CustomLogger {
     var runningRewriteTimeEffectiveSec = runningRewriteTimeEffective/1000000000.0
     var runningRewriteTimeInEffectiveSec = runningRewriteTimeInEffective/1000000000.0
 
+    var runningApplyTimeSec =  runningApplyTime/1000000000.0
+
     var runningExecutionTimeSec = runningExecutionTime/1000000000.0
     
     var runningDenominator = (runningSearchTime + runningRewriteTime)
@@ -106,7 +110,13 @@ object CustomLogger {
     var TotalRunTimeSec = runningExecutionTimeSec + runningSearchTimeSec + runningRewriteTimeSec
     var TotalCalculatedRunTime = runningExecutionTimeSec + noExecRunningSearchTimeSec + execRunningSearchTimeSec +
                                 noExecRunningRewriteTimeSec + runningRewriteTimeEffectiveSec + runningRewriteTimeInEffectiveSec
-    println("------------------------------")                            
+
+    var TotalTimeNotAccountedForSec = runningApplyTimeSec - TotalRunTimeSec
+
+    println("------------------------------") 
+    println(s"$descriptor: Total Time For Apply Method Calls $runningApplyTime ns or $runningApplyTimeSec sec")
+
+    println("------------------------------")
     println(s"$descriptor: Total Time in Search Phase that has an exec $execRunningSearchTime ns or $execRunningSearchTimeSec sec")
     println(s"$descriptor: Total Time in Search Phase that doesn't have an exec $noExecRunningSearchTime ns or $noExecRunningSearchTimeSec sec")
     println(s"$descriptor: Total Time in Search Phase $runningSearchTime ns or $runningSearchTimeSec sec")
@@ -124,8 +134,28 @@ object CustomLogger {
     println("------------------------------")
     println(s"$descriptor: Fraction Time spent in Search(Total Time in Search/(Total Time in Search + Total Time in Rewrite)) $fractionSpentSearch or percentage $percentSpentSearch")
     println(s"$descriptor: Fraction Time spent in Search(Total Time in Search/(Total Time in Search + Total Time in Effective and InEffective Rewrite)) $fractionCalcSpentSearch or percentage $percentCalcSpentSearch")
+    
     println("------------------------------")
     println(s"$descriptor: TotalRunTime (Execution + Search + Rewrite) is $TotalRunTimeSec sec")
+    println(s"$descriptor: Total time not accounted for (ApplyTime - TotalRunTime) is $TotalTimeNotAccountedForSec sec")
+
+    println("------------------------------")
+    println(s"""$descriptor: Output: {"data":
+    {"runningApplyTimeSec": $runningApplyTimeSec,
+    "execRunningSearchTimeSec": $execRunningSearchTimeSec,
+    "noExecRunningSearchTimeSec": $noExecRunningSearchTimeSec,
+    "runningSearchTimeSec": $runningSearchTimeSec,
+    "execRunningRewriteTimeSec": $execRunningRewriteTimeSec,
+    "runningRewriteTimeEffectiveSec": $runningRewriteTimeEffectiveSec,
+    "runningRewriteTimeInEffectiveSec": $runningRewriteTimeInEffectiveSec,
+    "noExecRunningRewriteTimeSec": $noExecRunningRewriteTimeSec,
+    "runningRewriteTimeSec": $runningRewriteTimeSec,
+    "runningExecutionTimeSec": $runningRewriteTimeSec,
+    "TotalRunTimeSec": $TotalRunTimeSec,
+    "TotalTimeNotAccountedForSec": $TotalTimeNotAccountedForSec
+    }}""")
+
+    println("------------------------------")
     // scalastyle:on
 
   }
@@ -191,6 +221,11 @@ object CustomLogger {
         // Code that takes care of total run time
         runningExecutionTime += diff
       }
+      if (stateStack.top contains "Apply")
+      {
+        val diff = time - mostRecentStamp
+        runningApplyTime += diff
+      }
     }
     // Comes here regardless of if this is the first call or recursion
     // Should this be System.nantom()???
@@ -247,6 +282,11 @@ object CustomLogger {
       // Code that takes care of total run time
       runningExecutionTime += diff
     }
+    if (stateStack.top contains "Apply")
+    {
+      val diff = time - mostRecentStamp
+      runningApplyTime += diff
+    }
     mostRecentStamp = time
     stateStack.pop
   }
@@ -280,7 +320,6 @@ object CustomLogger {
     onExitTime("Transform", System.nanoTime())
     anonFuncRet
   }
-
   def logMatchTime[F](
   descriptor: String,
   unAffected: Boolean,
