@@ -8,6 +8,6 @@ spark.sql("CREATE TABLE PARTSUPP (ps_partkey INT,ps_suppkey INT,ps_availqty INT,
 spark.sql("CREATE TABLE NATION (n_nationkey INT,n_name CHAR(25),n_regionkey INT,n_comment VARCHAR(152)) USING csv OPTIONS(path './tpch/tpch_table/nation.tbl', delimiter '|')")
 spark.sql("CREATE TABLE REGION (r_regionkey INT,r_name CHAR(25),r_comment VARCHAR(152)) USING csv OPTIONS(path './tpch/tpch_table/region.tbl', delimiter '|')")
 spark.sql("create temporary view revenue0 (supplier_no, total_revenue) as 	select 		l_suppkey, 		sum(l_extendedprice * (1 - l_discount)) 	from 		lineitem 	where 		l_shipdate >= date '1996-01-01' 		and l_shipdate < date '1996-01-01' + interval '3' month 	group by 		l_suppkey")
-spark.sql("select 	s_suppkey, 	s_name, 	s_address, 	s_phone, 	total_revenue from 	supplier, 	revenue0 where 	s_suppkey = supplier_no 	and total_revenue = ( 		select 			max(total_revenue) 		from 			revenue0 	) order by 	s_suppkey")
-spark.sql("drop view revenue0").explain(extended=true)
+spark.sql("select 	s_suppkey, 	s_name, 	s_address, 	s_phone, 	total_revenue from 	supplier, 	revenue0 where 	s_suppkey = supplier_no 	and total_revenue = ( 		select 			max(total_revenue) 		from 			revenue0 	) order by 	s_suppkey").explain(extended=true)
+spark.sql("drop view revenue0")
 System.exit(0)
