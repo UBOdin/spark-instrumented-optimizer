@@ -18,7 +18,7 @@
 package org.apache.spark.sql.catalyst.analysis
 
 import org.apache.spark.sql.SaveMode
-import org.apache.spark.sql.catalyst.{FunctionIdentifier, TableIdentifier}
+import org.apache.spark.sql.catalyst.{CustomLogger, FunctionIdentifier, TableIdentifier}
 import org.apache.spark.sql.catalyst.catalog.{BucketSpec, CatalogStorageFormat, CatalogTable, CatalogTableType, CatalogUtils}
 import org.apache.spark.sql.catalyst.expressions.{Alias, Attribute}
 import org.apache.spark.sql.catalyst.plans.logical._
@@ -45,443 +45,611 @@ class ResolveSessionCatalog(val catalogManager: CatalogManager)
   import org.apache.spark.sql.connector.catalog.CatalogV2Util._
   import org.apache.spark.sql.execution.datasources.v2.DataSourceV2Implicits._
 
-  override def apply(plan: LogicalPlan): LogicalPlan = plan.resolveOperatorsUp {
+  override def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("stopTheClock : Transform ResolveSessionCatalog")
+    {
+    plan.resolveOperatorsUp {
     case AddColumns(ResolvedV1TableIdentifier(ident), cols) =>
-      cols.foreach { c =>
-        assertTopLevelColumn(c.name, "AlterTableAddColumnsCommand")
-        if (!c.nullable) {
-          throw QueryCompilationErrors.addColumnWithV1TableCannotSpecifyNotNullError
+      CustomLogger.logMatchTime("stopTheClock : Match 1 ResolveSessionCatalog", true)
+      {
+        cols.foreach { c =>
+          assertTopLevelColumn(c.name, "AlterTableAddColumnsCommand")
+          if (!c.nullable) {
+            throw QueryCompilationErrors.addColumnWithV1TableCannotSpecifyNotNullError
+          }
         }
+        AlterTableAddColumnsCommand(ident.asTableIdentifier, cols.map(convertToStructField))
       }
-      AlterTableAddColumnsCommand(ident.asTableIdentifier, cols.map(convertToStructField))
 
     case ReplaceColumns(ResolvedV1TableIdentifier(_), _) =>
-      throw QueryCompilationErrors.replaceColumnsOnlySupportedWithV2TableError
+      CustomLogger.logMatchTime("stopTheClock : Match 2 ResolveSessionCatalog", true)
+      {
+        throw QueryCompilationErrors.replaceColumnsOnlySupportedWithV2TableError
+      }
 
     case a @ AlterColumn(ResolvedV1TableAndIdentifier(table, ident), _, _, _, _, _) =>
-      if (a.column.name.length > 1) {
-        throw QueryCompilationErrors.alterQualifiedColumnOnlySupportedWithV2TableError
+      CustomLogger.logMatchTime("stopTheClock : Match 3 ResolveSessionCatalog", true)
+      {
+        if (a.column.name.length > 1) {
+          throw QueryCompilationErrors.alterQualifiedColumnOnlySupportedWithV2TableError
+        }
+        if (a.nullable.isDefined) {
+          throw QueryCompilationErrors.alterColumnWithV1TableCannotSpecifyNotNullError
+        }
+        if (a.position.isDefined) {
+          throw QueryCompilationErrors.alterOnlySupportedWithV2TableError
+        }
+        val builder = new MetadataBuilder
+        // Add comment to metadata
+        a.comment.map(c => builder.putString("comment", c))
+        val colName = a.column.name(0)
+        val dataType = a.dataType.getOrElse {
+          table.schema.findNestedField(Seq(colName), resolver = conf.resolver)
+            .map(_._2.dataType)
+            .getOrElse {
+              throw QueryCompilationErrors.alterColumnCannotFindColumnInV1TableError(
+                quoteIfNeeded(colName), table)
+            }
+        }
+        val newColumn = StructField(
+          colName,
+          dataType,
+          nullable = true,
+          builder.build())
+        AlterTableChangeColumnCommand(ident.asTableIdentifier, colName, newColumn)
       }
-      if (a.nullable.isDefined) {
-        throw QueryCompilationErrors.alterColumnWithV1TableCannotSpecifyNotNullError
-      }
-      if (a.position.isDefined) {
-        throw QueryCompilationErrors.alterOnlySupportedWithV2TableError
-      }
-      val builder = new MetadataBuilder
-      // Add comment to metadata
-      a.comment.map(c => builder.putString("comment", c))
-      val colName = a.column.name(0)
-      val dataType = a.dataType.getOrElse {
-        table.schema.findNestedField(Seq(colName), resolver = conf.resolver)
-          .map(_._2.dataType)
-          .getOrElse {
-            throw QueryCompilationErrors.alterColumnCannotFindColumnInV1TableError(
-              quoteIfNeeded(colName), table)
-          }
-      }
-      val newColumn = StructField(
-        colName,
-        dataType,
-        nullable = true,
-        builder.build())
-      AlterTableChangeColumnCommand(ident.asTableIdentifier, colName, newColumn)
 
     case RenameColumn(ResolvedV1TableIdentifier(_), _, _) =>
-      throw QueryCompilationErrors.renameColumnOnlySupportedWithV2TableError
+      CustomLogger.logMatchTime("stopTheClock : Match 4 ResolveSessionCatalog", true)
+      {
+        throw QueryCompilationErrors.renameColumnOnlySupportedWithV2TableError
+      }
 
     case DropColumns(ResolvedV1TableIdentifier(_), _) =>
-      throw QueryCompilationErrors.dropColumnOnlySupportedWithV2TableError
+      CustomLogger.logMatchTime("stopTheClock : Match 5 ResolveSessionCatalog", true)
+      {
+        throw QueryCompilationErrors.dropColumnOnlySupportedWithV2TableError
+      }
 
     case SetTableProperties(ResolvedV1TableIdentifier(ident), props) =>
-      AlterTableSetPropertiesCommand(ident.asTableIdentifier, props, isView = false)
-
+      CustomLogger.logMatchTime("stopTheClock : Match 6 ResolveSessionCatalog", true)
+      {
+        AlterTableSetPropertiesCommand(ident.asTableIdentifier, props, isView = false)
+      }
     case UnsetTableProperties(ResolvedV1TableIdentifier(ident), keys, ifExists) =>
-      AlterTableUnsetPropertiesCommand(ident.asTableIdentifier, keys, ifExists, isView = false)
+      CustomLogger.logMatchTime("stopTheClock : Match 7 ResolveSessionCatalog", true)
+      {
+        AlterTableUnsetPropertiesCommand(ident.asTableIdentifier, keys, ifExists, isView = false)
+      }
 
     case SetViewProperties(ResolvedView(ident, _), props) =>
-      AlterTableSetPropertiesCommand(ident.asTableIdentifier, props, isView = true)
+      CustomLogger.logMatchTime("stopTheClock : Match 8 ResolveSessionCatalog", true)
+      {
+        AlterTableSetPropertiesCommand(ident.asTableIdentifier, props, isView = true)
+      }
 
     case UnsetViewProperties(ResolvedView(ident, _), keys, ifExists) =>
-      AlterTableUnsetPropertiesCommand(ident.asTableIdentifier, keys, ifExists, isView = true)
+      CustomLogger.logMatchTime("stopTheClock : Match 9 ResolveSessionCatalog", true)
+      {
+        AlterTableUnsetPropertiesCommand(ident.asTableIdentifier, keys, ifExists, isView = true)
+      }
 
     case DescribeNamespace(DatabaseInSessionCatalog(db), extended, output) =>
-      val newOutput = if (conf.getConf(SQLConf.LEGACY_KEEP_COMMAND_OUTPUT_SCHEMA)) {
-        assert(output.length == 2)
-        Seq(output.head.withName("database_description_item"),
-          output.last.withName("database_description_value"))
-      } else {
-        output
+      CustomLogger.logMatchTime("stopTheClock : Match 10 ResolveSessionCatalog", true)
+      {
+        val newOutput = if (conf.getConf(SQLConf.LEGACY_KEEP_COMMAND_OUTPUT_SCHEMA)) {
+          assert(output.length == 2)
+          Seq(output.head.withName("database_description_item"),
+            output.last.withName("database_description_value"))
+        } else {
+          output
+        }
+        DescribeDatabaseCommand(db, extended, newOutput)
       }
-      DescribeDatabaseCommand(db, extended, newOutput)
 
     case SetNamespaceProperties(DatabaseInSessionCatalog(db), properties) =>
-      AlterDatabasePropertiesCommand(db, properties)
+      CustomLogger.logMatchTime("stopTheClock : Match 11 ResolveSessionCatalog", true)
+      {
+        AlterDatabasePropertiesCommand(db, properties)
+      }
 
     case SetNamespaceLocation(DatabaseInSessionCatalog(db), location) =>
-      AlterDatabaseSetLocationCommand(db, location)
+      CustomLogger.logMatchTime("stopTheClock : Match 12 ResolveSessionCatalog", true)
+      {
+        AlterDatabaseSetLocationCommand(db, location)
+      }
 
     case s @ ShowNamespaces(ResolvedNamespace(cata, _), _, output) if isSessionCatalog(cata) =>
-      if (conf.getConf(SQLConf.LEGACY_KEEP_COMMAND_OUTPUT_SCHEMA)) {
-        assert(output.length == 1)
-        s.copy(output = Seq(output.head.withName("databaseName")))
-      } else {
-        s
+      CustomLogger.logMatchTime("stopTheClock : Match 13 ResolveSessionCatalog", true)
+      {
+        if (conf.getConf(SQLConf.LEGACY_KEEP_COMMAND_OUTPUT_SCHEMA)) {
+          assert(output.length == 1)
+          s.copy(output = Seq(output.head.withName("databaseName")))
+        } else {
+          s
+        }
       }
 
     case RenameTable(ResolvedV1TableOrViewIdentifier(oldName), newName, isView) =>
-      AlterTableRenameCommand(oldName.asTableIdentifier, newName.asTableIdentifier, isView)
+      CustomLogger.logMatchTime("stopTheClock : Match 14 ResolveSessionCatalog", true)
+      {
+        AlterTableRenameCommand(oldName.asTableIdentifier, newName.asTableIdentifier, isView)
+      }
 
-    // Use v1 command to describe (temp) view, as v2 catalog doesn't support view yet.
+      // Use v1 command to describe (temp) view, as v2 catalog doesn't support view yet.
     case DescribeRelation(
-         ResolvedV1TableOrViewIdentifier(ident), partitionSpec, isExtended, output) =>
-      DescribeTableCommand(ident.asTableIdentifier, partitionSpec, isExtended, output)
+      ResolvedV1TableOrViewIdentifier(ident), partitionSpec, isExtended, output) =>
+      CustomLogger.logMatchTime("stopTheClock : Match 15 ResolveSessionCatalog", true)
+      {
+        DescribeTableCommand(ident.asTableIdentifier, partitionSpec, isExtended, output)
+      }
 
     case DescribeColumn(
          ResolvedViewIdentifier(ident), column: UnresolvedAttribute, isExtended, output) =>
       // For views, the column will not be resolved by `ResolveReferences` because
       // `ResolvedView` stores only the identifier.
-      DescribeColumnCommand(ident.asTableIdentifier, column.nameParts, isExtended, output)
+      CustomLogger.logMatchTime("stopTheClock : Match 16 ResolveSessionCatalog", true)
+      {
+        DescribeColumnCommand(ident.asTableIdentifier, column.nameParts, isExtended, output)
+      }
 
     case DescribeColumn(ResolvedV1TableIdentifier(ident), column, isExtended, output) =>
-      column match {
-        case u: UnresolvedAttribute =>
-          throw QueryCompilationErrors.columnDoesNotExistError(u.name)
-        case a: Attribute =>
-          DescribeColumnCommand(ident.asTableIdentifier, a.qualifier :+ a.name, isExtended, output)
-        case Alias(child, _) =>
-          throw QueryCompilationErrors.commandNotSupportNestedColumnError(
-            "DESC TABLE COLUMN", toPrettySQL(child))
-        case _ =>
-          throw new IllegalStateException(s"[BUG] unexpected column expression: $column")
+      CustomLogger.logMatchTime("stopTheClock : Match 17 ResolveSessionCatalog", true)
+      {
+        column match {
+          case u: UnresolvedAttribute =>
+            throw QueryCompilationErrors.columnDoesNotExistError(u.name)
+          case a: Attribute =>
+            DescribeColumnCommand(
+              ident.asTableIdentifier, a.qualifier :+ a.name, isExtended, output)
+          case Alias(child, _) =>
+            throw QueryCompilationErrors.commandNotSupportNestedColumnError(
+              "DESC TABLE COLUMN", toPrettySQL(child))
+            case _ =>
+              throw new IllegalStateException(s"[BUG] unexpected column expression: $column")
+        }
       }
 
     // For CREATE TABLE [AS SELECT], we should use the v1 command if the catalog is resolved to the
     // session catalog and the table provider is not v2.
     case c @ CreateTableStatement(
          SessionCatalogAndTable(catalog, tbl), _, _, _, _, _, _, _, _, _, _, _) =>
-      val (storageFormat, provider) = getStorageFormatAndProvider(
-        c.provider, c.options, c.location, c.serde, ctas = false)
-      if (!isV2Provider(provider)) {
-        val tableDesc = buildCatalogTable(tbl.asTableIdentifier, c.tableSchema,
-          c.partitioning, c.bucketSpec, c.properties, provider, c.location,
-          c.comment, storageFormat, c.external)
-        val mode = if (c.ifNotExists) SaveMode.Ignore else SaveMode.ErrorIfExists
-        CreateTable(tableDesc, mode, None)
-      } else {
-        CreateV2Table(
-          catalog.asTableCatalog,
-          tbl.asIdentifier,
-          c.tableSchema,
-          // convert the bucket spec and add it as a transform
-          c.partitioning ++ c.bucketSpec.map(_.asTransform),
-          convertTableProperties(c),
-          ignoreIfExists = c.ifNotExists)
+      CustomLogger.logMatchTime("stopTheClock : Match 18 ResolveSessionCatalog", true)
+      {
+        val (storageFormat, provider) = getStorageFormatAndProvider(
+          c.provider, c.options, c.location, c.serde, ctas = false)
+        if (!isV2Provider(provider)) {
+          val tableDesc = buildCatalogTable(tbl.asTableIdentifier, c.tableSchema,
+            c.partitioning, c.bucketSpec, c.properties, provider, c.location,
+            c.comment, storageFormat, c.external)
+          val mode = if (c.ifNotExists) SaveMode.Ignore else SaveMode.ErrorIfExists
+          CreateTable(tableDesc, mode, None)
+        } else {
+          CreateV2Table(
+            catalog.asTableCatalog,
+            tbl.asIdentifier,
+            c.tableSchema,
+            // convert the bucket spec and add it as a transform
+            c.partitioning ++ c.bucketSpec.map(_.asTransform),
+            convertTableProperties(c),
+            ignoreIfExists = c.ifNotExists)
+        }
       }
 
     case c @ CreateTableAsSelectStatement(
          SessionCatalogAndTable(catalog, tbl), _, _, _, _, _, _, _, _, _, _, _, _) =>
-      val (storageFormat, provider) = getStorageFormatAndProvider(
-        c.provider, c.options, c.location, c.serde, ctas = true)
-      if (!isV2Provider(provider)) {
-        val tableDesc = buildCatalogTable(tbl.asTableIdentifier, new StructType,
-          c.partitioning, c.bucketSpec, c.properties, provider, c.location,
-          c.comment, storageFormat, c.external)
-        val mode = if (c.ifNotExists) SaveMode.Ignore else SaveMode.ErrorIfExists
-        CreateTable(tableDesc, mode, Some(c.asSelect))
-      } else {
-        CreateTableAsSelect(
-          catalog.asTableCatalog,
-          tbl.asIdentifier,
-          // convert the bucket spec and add it as a transform
-          c.partitioning ++ c.bucketSpec.map(_.asTransform),
-          c.asSelect,
-          convertTableProperties(c),
-          writeOptions = c.writeOptions,
-          ignoreIfExists = c.ifNotExists)
+      CustomLogger.logMatchTime("stopTheClock : Match 19 ResolveSessionCatalog", true)
+      {
+        val (storageFormat, provider) = getStorageFormatAndProvider(
+          c.provider, c.options, c.location, c.serde, ctas = true)
+        if (!isV2Provider(provider)) {
+          val tableDesc = buildCatalogTable(tbl.asTableIdentifier, new StructType,
+            c.partitioning, c.bucketSpec, c.properties, provider, c.location,
+            c.comment, storageFormat, c.external)
+          val mode = if (c.ifNotExists) SaveMode.Ignore else SaveMode.ErrorIfExists
+          CreateTable(tableDesc, mode, Some(c.asSelect))
+        } else {
+          CreateTableAsSelect(
+            catalog.asTableCatalog,
+            tbl.asIdentifier,
+            // convert the bucket spec and add it as a transform
+            c.partitioning ++ c.bucketSpec.map(_.asTransform),
+            c.asSelect,
+            convertTableProperties(c),
+            writeOptions = c.writeOptions,
+            ignoreIfExists = c.ifNotExists)
+        }
       }
 
     case RefreshTable(ResolvedV1TableIdentifier(ident)) =>
-      RefreshTableCommand(ident.asTableIdentifier)
+      CustomLogger.logMatchTime("stopTheClock : Match 20 ResolveSessionCatalog", true)
+      {
+        RefreshTableCommand(ident.asTableIdentifier)
+      }
 
     case RefreshTable(r: ResolvedView) =>
-      RefreshTableCommand(r.identifier.asTableIdentifier)
+      CustomLogger.logMatchTime("stopTheClock : Match 21 ResolveSessionCatalog", true)
+      {
+        RefreshTableCommand(r.identifier.asTableIdentifier)
+      }
 
     // For REPLACE TABLE [AS SELECT], we should fail if the catalog is resolved to the
     // session catalog and the table provider is not v2.
     case c @ ReplaceTableStatement(
          SessionCatalogAndTable(catalog, tbl), _, _, _, _, _, _, _, _, _, _) =>
-      val provider = c.provider.getOrElse(conf.defaultDataSourceName)
-      if (!isV2Provider(provider)) {
-        throw QueryCompilationErrors.replaceTableOnlySupportedWithV2TableError
-      } else {
-        ReplaceTable(
-          catalog.asTableCatalog,
-          tbl.asIdentifier,
-          c.tableSchema,
-          // convert the bucket spec and add it as a transform
-          c.partitioning ++ c.bucketSpec.map(_.asTransform),
-          convertTableProperties(c),
-          orCreate = c.orCreate)
+      CustomLogger.logMatchTime("stopTheClock : Match 22 ResolveSessionCatalog", true)
+      {
+        val provider = c.provider.getOrElse(conf.defaultDataSourceName)
+        if (!isV2Provider(provider)) {
+          throw QueryCompilationErrors.replaceTableOnlySupportedWithV2TableError
+        } else {
+          ReplaceTable(
+            catalog.asTableCatalog,
+            tbl.asIdentifier,
+            c.tableSchema,
+            // convert the bucket spec and add it as a transform
+            c.partitioning ++ c.bucketSpec.map(_.asTransform),
+            convertTableProperties(c),
+            orCreate = c.orCreate)
+        }
       }
 
     case c @ ReplaceTableAsSelectStatement(
          SessionCatalogAndTable(catalog, tbl), _, _, _, _, _, _, _, _, _, _, _) =>
-      val provider = c.provider.getOrElse(conf.defaultDataSourceName)
-      if (!isV2Provider(provider)) {
-        throw QueryCompilationErrors.replaceTableAsSelectOnlySupportedWithV2TableError
-      } else {
-        ReplaceTableAsSelect(
-          catalog.asTableCatalog,
-          tbl.asIdentifier,
-          // convert the bucket spec and add it as a transform
-          c.partitioning ++ c.bucketSpec.map(_.asTransform),
-          c.asSelect,
-          convertTableProperties(c),
-          writeOptions = c.writeOptions,
-          orCreate = c.orCreate)
+      CustomLogger.logMatchTime("stopTheClock : Match 23 ResolveSessionCatalog", true)
+      {
+        val provider = c.provider.getOrElse(conf.defaultDataSourceName)
+        if (!isV2Provider(provider)) {
+          throw QueryCompilationErrors.replaceTableAsSelectOnlySupportedWithV2TableError
+        } else {
+          ReplaceTableAsSelect(
+            catalog.asTableCatalog,
+            tbl.asIdentifier,
+            // convert the bucket spec and add it as a transform
+            c.partitioning ++ c.bucketSpec.map(_.asTransform),
+            c.asSelect,
+            convertTableProperties(c),
+            writeOptions = c.writeOptions,
+            orCreate = c.orCreate)
+        }
       }
 
     case DropTable(ResolvedV1TableIdentifier(ident), ifExists, purge) =>
-      DropTableCommand(ident.asTableIdentifier, ifExists, isView = false, purge = purge)
+      CustomLogger.logMatchTime("stopTheClock : Match 24 ResolveSessionCatalog", true)
+      {
+        DropTableCommand(ident.asTableIdentifier, ifExists, isView = false, purge = purge)
+      }
 
     // v1 DROP TABLE supports temp view.
     case DropTable(r: ResolvedView, ifExists, purge) =>
-      if (!r.isTemp) {
-        throw QueryCompilationErrors.cannotDropViewWithDropTableError
+      CustomLogger.logMatchTime("stopTheClock : Match 25 ResolveSessionCatalog", true)
+      {
+        if (!r.isTemp) {
+          throw QueryCompilationErrors.cannotDropViewWithDropTableError
+        }
+        DropTableCommand(r.identifier.asTableIdentifier, ifExists, isView = false, purge = purge)
       }
-      DropTableCommand(r.identifier.asTableIdentifier, ifExists, isView = false, purge = purge)
 
     case DropView(r: ResolvedView, ifExists) =>
-      DropTableCommand(r.identifier.asTableIdentifier, ifExists, isView = true, purge = false)
+      CustomLogger.logMatchTime("stopTheClock : Match 26 ResolveSessionCatalog", true)
+      {
+        DropTableCommand(r.identifier.asTableIdentifier, ifExists, isView = true, purge = false)
+      }
 
     case c @ CreateNamespaceStatement(CatalogAndNamespace(catalog, ns), _, _)
         if isSessionCatalog(catalog) =>
-      if (ns.length != 1) {
-        throw QueryCompilationErrors.invalidDatabaseNameError(ns.quoted)
-      }
+        CustomLogger.logMatchTime("stopTheClock : Match 27 ResolveSessionCatalog", true)
+        {
+          if (ns.length != 1) {
+            throw QueryCompilationErrors.invalidDatabaseNameError(ns.quoted)
+          }
 
-      val comment = c.properties.get(SupportsNamespaces.PROP_COMMENT)
-      val location = c.properties.get(SupportsNamespaces.PROP_LOCATION)
-      val newProperties = c.properties -- CatalogV2Util.NAMESPACE_RESERVED_PROPERTIES
-      CreateDatabaseCommand(ns.head, c.ifNotExists, location, comment, newProperties)
+          val comment = c.properties.get(SupportsNamespaces.PROP_COMMENT)
+          val location = c.properties.get(SupportsNamespaces.PROP_LOCATION)
+          val newProperties = c.properties -- CatalogV2Util.NAMESPACE_RESERVED_PROPERTIES
+          CreateDatabaseCommand(ns.head, c.ifNotExists, location, comment, newProperties)
+        }
 
     case d @ DropNamespace(DatabaseInSessionCatalog(db), _, _) =>
-      DropDatabaseCommand(db, d.ifExists, d.cascade)
+      CustomLogger.logMatchTime("stopTheClock : Match 28 ResolveSessionCatalog", true)
+      {
+        DropDatabaseCommand(db, d.ifExists, d.cascade)
+      }
 
     case ShowTables(DatabaseInSessionCatalog(db), pattern, output) =>
-      val newOutput = if (conf.getConf(SQLConf.LEGACY_KEEP_COMMAND_OUTPUT_SCHEMA)) {
-        assert(output.length == 3)
-        output.head.withName("database") +: output.tail
-      } else {
-        output
+      CustomLogger.logMatchTime("stopTheClock : Match 29 ResolveSessionCatalog", true)
+      {
+        val newOutput = if (conf.getConf(SQLConf.LEGACY_KEEP_COMMAND_OUTPUT_SCHEMA)) {
+          assert(output.length == 3)
+          output.head.withName("database") +: output.tail
+        } else {
+          output
+        }
+        ShowTablesCommand(Some(db), pattern, newOutput)
       }
-      ShowTablesCommand(Some(db), pattern, newOutput)
 
     case ShowTableExtended(
         DatabaseInSessionCatalog(db),
         pattern,
         partitionSpec @ (None | Some(UnresolvedPartitionSpec(_, _))),
         output) =>
-      val newOutput = if (conf.getConf(SQLConf.LEGACY_KEEP_COMMAND_OUTPUT_SCHEMA)) {
-        assert(output.length == 4)
-        output.head.withName("database") +: output.tail
-      } else {
-        output
+      CustomLogger.logMatchTime("stopTheClock : Match 30 ResolveSessionCatalog", true)
+      {
+        val newOutput = if (conf.getConf(SQLConf.LEGACY_KEEP_COMMAND_OUTPUT_SCHEMA)) {
+          assert(output.length == 4)
+          output.head.withName("database") +: output.tail
+        } else {
+          output
+        }
+        val tablePartitionSpec = partitionSpec.map(_.asInstanceOf[UnresolvedPartitionSpec].spec)
+        ShowTablesCommand(Some(db), Some(pattern), newOutput, true, tablePartitionSpec)
       }
-      val tablePartitionSpec = partitionSpec.map(_.asInstanceOf[UnresolvedPartitionSpec].spec)
-      ShowTablesCommand(Some(db), Some(pattern), newOutput, true, tablePartitionSpec)
 
     // ANALYZE TABLE works on permanent views if the views are cached.
     case AnalyzeTable(ResolvedV1TableOrViewIdentifier(ident), partitionSpec, noScan) =>
-      if (partitionSpec.isEmpty) {
-        AnalyzeTableCommand(ident.asTableIdentifier, noScan)
-      } else {
-        AnalyzePartitionCommand(ident.asTableIdentifier, partitionSpec, noScan)
+      CustomLogger.logMatchTime("stopTheClock : Match 31 ResolveSessionCatalog", true)
+      {
+        if (partitionSpec.isEmpty) {
+          AnalyzeTableCommand(ident.asTableIdentifier, noScan)
+        } else {
+          AnalyzePartitionCommand(ident.asTableIdentifier, partitionSpec, noScan)
+        }
       }
 
     case AnalyzeTables(DatabaseInSessionCatalog(db), noScan) =>
-      AnalyzeTablesCommand(Some(db), noScan)
+      CustomLogger.logMatchTime("stopTheClock : Match 32 ResolveSessionCatalog", true)
+      {
+        AnalyzeTablesCommand(Some(db), noScan)
+      }
 
     case AnalyzeColumn(ResolvedV1TableOrViewIdentifier(ident), columnNames, allColumns) =>
-      AnalyzeColumnCommand(ident.asTableIdentifier, columnNames, allColumns)
+      CustomLogger.logMatchTime("stopTheClock : Match 33 ResolveSessionCatalog", true)
+      {
+        AnalyzeColumnCommand(ident.asTableIdentifier, columnNames, allColumns)
+      }
 
     case RepairTable(ResolvedV1TableIdentifier(ident), addPartitions, dropPartitions) =>
       RepairTableCommand(ident.asTableIdentifier, addPartitions, dropPartitions)
 
     case LoadData(ResolvedV1TableIdentifier(ident), path, isLocal, isOverwrite, partition) =>
-      LoadDataCommand(
-        ident.asTableIdentifier,
-        path,
-        isLocal,
-        isOverwrite,
-        partition)
+      CustomLogger.logMatchTime("stopTheClock : Match 34 ResolveSessionCatalog", true)
+      {
+        LoadDataCommand(
+          ident.asTableIdentifier,
+          path,
+          isLocal,
+          isOverwrite,
+          partition)
+      }
 
     case ShowCreateTable(ResolvedV1TableOrViewIdentifier(ident), asSerde, output) =>
-      if (asSerde) {
-        ShowCreateTableAsSerdeCommand(ident.asTableIdentifier, output)
-      } else {
-        ShowCreateTableCommand(ident.asTableIdentifier, output)
+      CustomLogger.logMatchTime("stopTheClock : Match 35 ResolveSessionCatalog", true)
+      {
+        if (asSerde) {
+          ShowCreateTableAsSerdeCommand(ident.asTableIdentifier, output)
+        } else {
+          ShowCreateTableCommand(ident.asTableIdentifier, output)
+        }
       }
 
     case TruncateTable(ResolvedV1TableIdentifier(ident)) =>
-      TruncateTableCommand(ident.asTableIdentifier, None)
+      CustomLogger.logMatchTime("stopTheClock : Match 36 ResolveSessionCatalog", true)
+      {
+        TruncateTableCommand(ident.asTableIdentifier, None)
+      }
 
     case TruncatePartition(ResolvedV1TableIdentifier(ident), partitionSpec) =>
-      TruncateTableCommand(
-        ident.asTableIdentifier,
-        Seq(partitionSpec).asUnresolvedPartitionSpecs.map(_.spec).headOption)
+      CustomLogger.logMatchTime("stopTheClock : Match 37 ResolveSessionCatalog", true)
+      {
+        TruncateTableCommand(
+          ident.asTableIdentifier,
+          Seq(partitionSpec).asUnresolvedPartitionSpecs.map(_.spec).headOption)
+      }
 
     case s @ ShowPartitions(
         ResolvedV1TableOrViewIdentifier(ident),
         pattern @ (None | Some(UnresolvedPartitionSpec(_, _))), output) =>
-      ShowPartitionsCommand(
-        ident.asTableIdentifier,
-        output,
-        pattern.map(_.asInstanceOf[UnresolvedPartitionSpec].spec))
+      CustomLogger.logMatchTime("stopTheClock : Match 38 ResolveSessionCatalog", true)
+      {
+        ShowPartitionsCommand(
+          ident.asTableIdentifier,
+          output,
+          pattern.map(_.asInstanceOf[UnresolvedPartitionSpec].spec))
+      }
 
     case s @ ShowColumns(ResolvedV1TableOrViewIdentifier(ident), ns, output) =>
-      val v1TableName = ident.asTableIdentifier
-      val resolver = conf.resolver
-      val db = ns match {
-        case Some(db) if v1TableName.database.exists(!resolver(_, db.head)) =>
-          throw QueryCompilationErrors.showColumnsWithConflictDatabasesError(db, v1TableName)
-        case _ => ns.map(_.head)
+      CustomLogger.logMatchTime("stopTheClock : Match 39 ResolveSessionCatalog", true)
+      {
+        val v1TableName = ident.asTableIdentifier
+        val resolver = conf.resolver
+        val db = ns match {
+          case Some(db) if v1TableName.database.exists(!resolver(_, db.head)) =>
+            throw QueryCompilationErrors.showColumnsWithConflictDatabasesError(db, v1TableName)
+          case _ => ns.map(_.head)
+        }
+        ShowColumnsCommand(db, v1TableName, output)
       }
-      ShowColumnsCommand(db, v1TableName, output)
 
     case RecoverPartitions(ResolvedV1TableIdentifier(ident)) =>
-      RepairTableCommand(
-        ident.asTableIdentifier,
-        enableAddPartitions = true,
-        enableDropPartitions = false,
-        "ALTER TABLE RECOVER PARTITIONS")
+      CustomLogger.logMatchTime("stopTheClock : Match 40 ResolveSessionCatalog", true)
+      {
+        RepairTableCommand(
+          ident.asTableIdentifier,
+          enableAddPartitions = true,
+          enableDropPartitions = false,
+          "ALTER TABLE RECOVER PARTITIONS")
+      }
 
     case AddPartitions(ResolvedV1TableIdentifier(ident), partSpecsAndLocs, ifNotExists) =>
-      AlterTableAddPartitionCommand(
-        ident.asTableIdentifier,
-        partSpecsAndLocs.asUnresolvedPartitionSpecs.map(spec => (spec.spec, spec.location)),
-        ifNotExists)
+      CustomLogger.logMatchTime("stopTheClock : Match 41 ResolveSessionCatalog", true)
+      {
+        AlterTableAddPartitionCommand(
+          ident.asTableIdentifier,
+          partSpecsAndLocs.asUnresolvedPartitionSpecs.map(spec => (spec.spec, spec.location)),
+          ifNotExists)
+      }
 
     case RenamePartitions(
         ResolvedV1TableIdentifier(ident),
         UnresolvedPartitionSpec(from, _),
         UnresolvedPartitionSpec(to, _)) =>
-      AlterTableRenamePartitionCommand(ident.asTableIdentifier, from, to)
+      CustomLogger.logMatchTime("stopTheClock : Match 42 ResolveSessionCatalog", true)
+      {
+        AlterTableRenamePartitionCommand(ident.asTableIdentifier, from, to)
+      }
 
     case DropPartitions(
         ResolvedV1TableIdentifier(ident), specs, ifExists, purge) =>
-      AlterTableDropPartitionCommand(
-        ident.asTableIdentifier,
-        specs.asUnresolvedPartitionSpecs.map(_.spec),
-        ifExists,
-        purge,
-        retainData = false)
+      CustomLogger.logMatchTime("stopTheClock : Match 43 ResolveSessionCatalog", true)
+      {
+        AlterTableDropPartitionCommand(
+          ident.asTableIdentifier,
+          specs.asUnresolvedPartitionSpecs.map(_.spec),
+          ifExists,
+          purge,
+          retainData = false)
+      }
 
     case SetTableSerDeProperties(
         ResolvedV1TableIdentifier(ident),
         serdeClassName,
         serdeProperties,
         partitionSpec) =>
-      AlterTableSerDePropertiesCommand(
-        ident.asTableIdentifier,
-        serdeClassName,
-        serdeProperties,
-        partitionSpec)
+      CustomLogger.logMatchTime("stopTheClock : Match 44 ResolveSessionCatalog", true)
+      {
+        AlterTableSerDePropertiesCommand(
+          ident.asTableIdentifier,
+          serdeClassName,
+          serdeProperties,
+          partitionSpec)
+      }
 
     case SetTableLocation(ResolvedV1TableIdentifier(ident), partitionSpec, location) =>
-      AlterTableSetLocationCommand(ident.asTableIdentifier, partitionSpec, location)
+      CustomLogger.logMatchTime("stopTheClock : Match 45 ResolveSessionCatalog", true)
+      {
+        AlterTableSetLocationCommand(ident.asTableIdentifier, partitionSpec, location)
+      }
 
     case AlterViewAs(ResolvedView(ident, _), originalText, query) =>
-      AlterViewAsCommand(
-        ident.asTableIdentifier,
-        originalText,
-        query)
+      CustomLogger.logMatchTime("stopTheClock : Match 46 ResolveSessionCatalog", true)
+      {
+        AlterViewAsCommand(
+          ident.asTableIdentifier,
+          originalText,
+          query)
+      }
 
     case CreateViewStatement(
       tbl, userSpecifiedColumns, comment, properties,
       originalText, child, allowExisting, replace, viewType) =>
-
-      val v1TableName = if (viewType != PersistedView) {
-        // temp view doesn't belong to any catalog and we shouldn't resolve catalog in the name.
-        tbl
-      } else {
-        parseV1Table(tbl, "CREATE VIEW")
+      CustomLogger.logMatchTime("stopTheClock : Match 47 ResolveSessionCatalog", true)
+      {
+        val v1TableName = if (viewType != PersistedView) {
+          // temp view doesn't belong to any catalog and we shouldn't resolve catalog in the name.
+          tbl
+        } else {
+          parseV1Table(tbl, "CREATE VIEW")
+        }
+        CreateViewCommand(
+          name = v1TableName.asTableIdentifier,
+          userSpecifiedColumns = userSpecifiedColumns,
+          comment = comment,
+          properties = properties,
+          originalText = originalText,
+          plan = child,
+          allowExisting = allowExisting,
+          replace = replace,
+          viewType = viewType)
       }
-      CreateViewCommand(
-        name = v1TableName.asTableIdentifier,
-        userSpecifiedColumns = userSpecifiedColumns,
-        comment = comment,
-        properties = properties,
-        originalText = originalText,
-        plan = child,
-        allowExisting = allowExisting,
-        replace = replace,
-        viewType = viewType)
 
     case ShowViews(resolved: ResolvedNamespace, pattern, output) =>
-      resolved match {
-        case DatabaseInSessionCatalog(db) => ShowViewsCommand(db, pattern, output)
-        case _ =>
-          throw QueryCompilationErrors.externalCatalogNotSupportShowViewsError(resolved)
+      CustomLogger.logMatchTime("stopTheClock : Match 48 ResolveSessionCatalog", true)
+      {
+        resolved match {
+          case DatabaseInSessionCatalog(db) => ShowViewsCommand(db, pattern, output)
+          case _ =>
+            throw QueryCompilationErrors.externalCatalogNotSupportShowViewsError(resolved)
+        }
       }
 
     case s @ ShowTableProperties(ResolvedV1TableOrViewIdentifier(ident), propertyKey, output) =>
-      val newOutput =
-        if (conf.getConf(SQLConf.LEGACY_KEEP_COMMAND_OUTPUT_SCHEMA) && propertyKey.isDefined) {
-          assert(output.length == 2)
-          output.tail
-        } else {
-          output
-        }
-      ShowTablePropertiesCommand(ident.asTableIdentifier, propertyKey, newOutput)
+      CustomLogger.logMatchTime("stopTheClock : Match 49 ResolveSessionCatalog", true)
+      {
+        val newOutput =
+          if (conf.getConf(SQLConf.LEGACY_KEEP_COMMAND_OUTPUT_SCHEMA) && propertyKey.isDefined) {
+            assert(output.length == 2)
+            output.tail
+          } else {
+            output
+          }
+          ShowTablePropertiesCommand(ident.asTableIdentifier, propertyKey, newOutput)
+      }
 
     case DescribeFunction(ResolvedFunc(identifier), extended) =>
-      DescribeFunctionCommand(identifier.asFunctionIdentifier, extended)
+      CustomLogger.logMatchTime("stopTheClock : Match 50 ResolveSessionCatalog", true)
+      {
+        DescribeFunctionCommand(identifier.asFunctionIdentifier, extended)
+      }
 
     case ShowFunctions(None, userScope, systemScope, pattern, output) =>
-      ShowFunctionsCommand(None, pattern, userScope, systemScope, output)
+      CustomLogger.logMatchTime("stopTheClock : Match 51 ResolveSessionCatalog", true)
+      {
+        ShowFunctionsCommand(None, pattern, userScope, systemScope, output)
+      }
 
     case ShowFunctions(Some(ResolvedFunc(identifier)), userScope, systemScope, _, output) =>
-      val funcIdentifier = identifier.asFunctionIdentifier
-      ShowFunctionsCommand(
-        funcIdentifier.database, Some(funcIdentifier.funcName), userScope, systemScope, output)
+      CustomLogger.logMatchTime("stopTheClock : Match 52 ResolveSessionCatalog", true)
+      {
+        val funcIdentifier = identifier.asFunctionIdentifier
+        ShowFunctionsCommand(
+          funcIdentifier.database, Some(funcIdentifier.funcName), userScope, systemScope, output)
+      }
 
     case DropFunction(ResolvedFunc(identifier), ifExists, isTemp) =>
-      val funcIdentifier = identifier.asFunctionIdentifier
-      DropFunctionCommand(funcIdentifier.database, funcIdentifier.funcName, ifExists, isTemp)
+      CustomLogger.logMatchTime("stopTheClock : Match 53 ResolveSessionCatalog", true)
+      {
+        val funcIdentifier = identifier.asFunctionIdentifier
+        DropFunctionCommand(funcIdentifier.database, funcIdentifier.funcName, ifExists, isTemp)
+      }
 
     case CreateFunctionStatement(nameParts,
       className, resources, isTemp, ignoreIfExists, replace) =>
-      if (isTemp) {
-        // temp func doesn't belong to any catalog and we shouldn't resolve catalog in the name.
-        val database = if (nameParts.length > 2) {
-          throw QueryCompilationErrors.requiresSinglePartNamespaceError(nameParts)
-        } else if (nameParts.length == 2) {
-          Some(nameParts.head)
+      CustomLogger.logMatchTime("stopTheClock : Match 54 ResolveSessionCatalog", true)
+      {
+        if (isTemp) {
+          // temp func doesn't belong to any catalog and we shouldn't resolve catalog in the name.
+          val database = if (nameParts.length > 2) {
+            throw QueryCompilationErrors.requiresSinglePartNamespaceError(nameParts)
+          } else if (nameParts.length == 2) {
+            Some(nameParts.head)
+          } else {
+            None
+          }
+          CreateFunctionCommand(
+            database,
+            nameParts.last,
+            className,
+            resources,
+            isTemp,
+            ignoreIfExists,
+            replace)
         } else {
-          None
+          val FunctionIdentifier(function, database) =
+            parseSessionCatalogFunctionIdentifier(nameParts)
+          CreateFunctionCommand(database, function, className, resources, isTemp, ignoreIfExists,
+            replace)
         }
-        CreateFunctionCommand(
-          database,
-          nameParts.last,
-          className,
-          resources,
-          isTemp,
-          ignoreIfExists,
-          replace)
-      } else {
-        val FunctionIdentifier(function, database) =
-          parseSessionCatalogFunctionIdentifier(nameParts)
-        CreateFunctionCommand(database, function, className, resources, isTemp, ignoreIfExists,
-          replace)
       }
 
     case RefreshFunction(ResolvedFunc(identifier)) =>
+      CustomLogger.logMatchTime("stopTheClock : Match 55 ResolveSessionCatalog", true)
+      {
       // Fallback to v1 command
       val funcIdentifier = identifier.asFunctionIdentifier
       RefreshFunctionCommand(funcIdentifier.database, funcIdentifier.funcName)
+      }
   }
+    }
 
   private def parseV1Table(tableName: Seq[String], sql: String): Seq[String] = tableName match {
     case SessionCatalogAndTable(_, tbl) => tbl
