@@ -2108,31 +2108,49 @@ class Analyzer(override val catalogManager: CatalogManager)
    * have no effect on the results.
    */
   object ResolveOrdinalInOrderByAndGroupBy extends Rule[LogicalPlan] {
-    def apply(plan: LogicalPlan): LogicalPlan = plan.resolveOperatorsUpWithPruning(
-      _.containsPattern(UNRESOLVED_ORDINAL), ruleId) {
-      case p if !p.childrenResolved => p
-      // Replace the index with the related attribute for ORDER BY,
-      // which is a 1-base position of the projection list.
-      case Sort(orders, global, child)
-        if orders.exists(_.child.isInstanceOf[UnresolvedOrdinal]) =>
-        val newOrders = orders map {
-          case s @ SortOrder(UnresolvedOrdinal(index), direction, nullOrdering, _) =>
-            if (index > 0 && index <= child.output.size) {
-              SortOrder(child.output(index - 1), direction, nullOrdering, Seq.empty)
-            } else {
-              throw QueryCompilationErrors.orderByPositionRangeError(index, child.output.size, s)
+    def apply(plan: LogicalPlan): LogicalPlan =
+      CustomLogger.logTransformTime("stopTheClock : Transform ResolveOrdinalInOrderByAndGroupBy")
+      {
+        plan.resolveOperatorsUpWithPruning(_.containsPattern(UNRESOLVED_ORDINAL), ruleId) {
+          case p if !p.childrenResolved =>
+            CustomLogger.logMatchTime("stopTheClock : Match 2 ResolveOrdinalInOrderByAndGroupBy",
+              true)
+            {
+              p
             }
-          case o => o
-        }
-        Sort(newOrders, global, child)
+          // Replace the index with the related attribute for ORDER BY,
+          // which is a 1-base position of the projection list.
+          case Sort(orders, global, child)
+          if orders.exists(_.child.isInstanceOf[UnresolvedOrdinal]) =>
+            CustomLogger.logMatchTime("stopTheClock : Match 2 ResolveOrdinalInOrderByAndGroupBy",
+              true)
+            {
+              val newOrders = orders map {
+                case s @ SortOrder(UnresolvedOrdinal(index), direction, nullOrdering, _) =>
+                  if (index > 0 && index <= child.output.size) {
+                    SortOrder(child.output(index - 1), direction, nullOrdering, Seq.empty)
+                  } else {
+                    throw QueryCompilationErrors.orderByPositionRangeError(
+                      index, child.output.size, s)
+                  }
+                case o => o
+              }
+              Sort(newOrders, global, child)
+            }
 
-      // Replace the index with the corresponding expression in aggregateExpressions. The index is
-      // a 1-base position of aggregateExpressions, which is output columns (select expression)
-      case Aggregate(groups, aggs, child) if aggs.forall(_.resolved) &&
-        groups.exists(containUnresolvedOrdinal) =>
-        val newGroups = groups.map(resolveGroupByExpressionOrdinal(_, aggs))
-        Aggregate(newGroups, aggs, child)
-    }
+            // Replace the index with the corresponding expression in aggregateExpressions.
+            // The index is a 1-base position of aggregateExpressions, which is output columns
+            // (select expression)
+            case Aggregate(groups, aggs, child) if aggs.forall(_.resolved) &&
+            groups.exists(containUnresolvedOrdinal) =>
+            CustomLogger.logMatchTime("stopTheClock : Match 3 ResolveOrdinalInOrderByAndGroupBy",
+              true)
+            {
+              val newGroups = groups.map(resolveGroupByExpressionOrdinal(_, aggs))
+              Aggregate(newGroups, aggs, child)
+            }
+        }
+      }
 
     private def containUnresolvedOrdinal(e: Expression): Boolean = e match {
       case _: UnresolvedOrdinal => true
@@ -2186,14 +2204,21 @@ class Analyzer(override val catalogManager: CatalogManager)
     // Group by alias is not allowed in ANSI mode.
     private def allowGroupByAlias: Boolean = conf.groupByAliases && !conf.ansiEnabled
 
-    override def apply(plan: LogicalPlan): LogicalPlan = plan.resolveOperatorsUpWithPruning(
-      // mayResolveAttrByAggregateExprs requires the TreePattern UNRESOLVED_ATTRIBUTE.
-      _.containsAllPatterns(AGGREGATE, UNRESOLVED_ATTRIBUTE), ruleId) {
-      case agg @ Aggregate(groups, aggs, child)
-          if conf.groupByAliases && child.resolved && aggs.forall(_.resolved) &&
+    override def apply(plan: LogicalPlan): LogicalPlan =
+      CustomLogger.logTransformTime("stopTheClock : Transform ResolveAggAliasInGroupBy")
+      {
+        plan.resolveOperatorsUpWithPruning(
+          // mayResolveAttrByAggregateExprs requires the TreePattern UNRESOLVED_ATTRIBUTE.
+          _.containsAllPatterns(AGGREGATE, UNRESOLVED_ATTRIBUTE), ruleId) {
+            case agg @ Aggregate(groups, aggs, child)
+            if conf.groupByAliases && child.resolved && aggs.forall(_.resolved) &&
             groups.exists(!_.resolved) =>
-        agg.copy(groupingExpressions = mayResolveAttrByAggregateExprs(groups, aggs, child))
-    }
+              CustomLogger.logMatchTime("stopTheClock : Match 1 ResolveAggAliasInGroupBy", true)
+              {
+                agg.copy(groupingExpressions = mayResolveAttrByAggregateExprs(groups, aggs, child))
+              }
+          }
+      }
   }
 
   /**
@@ -2205,42 +2230,61 @@ class Analyzer(override val catalogManager: CatalogManager)
    * The HAVING clause could also used a grouping columns that is not presented in the SELECT.
    */
   object ResolveMissingReferences extends Rule[LogicalPlan] {
-    def apply(plan: LogicalPlan): LogicalPlan = plan.resolveOperatorsUpWithPruning(
-      _.containsAnyPattern(SORT, FILTER, REPARTITION_OPERATION), ruleId) {
-      // Skip sort with aggregate. This will be handled in ResolveAggregateFunctions
-      case sa @ Sort(_, _, child: Aggregate) => sa
+    def apply(plan: LogicalPlan): LogicalPlan =
+      CustomLogger.logTransformTime("stopTheClock : Transform ResolveMissingReferences")
+      {
+        plan.resolveOperatorsUpWithPruning(
+          _.containsAnyPattern(SORT, FILTER, REPARTITION_OPERATION), ruleId) {
+            // Skip sort with aggregate. This will be handled in ResolveAggregateFunctions
+            case sa @ Sort(_, _, child: Aggregate) =>
+              CustomLogger.logMatchTime("stopTheClock : Match 1 ResolveMissingReferences", true)
+              {
+                sa
+              }
 
-      case s @ Sort(order, _, child)
-          if (!s.resolved || s.missingInput.nonEmpty) && child.resolved =>
-        val (newOrder, newChild) = resolveExprsAndAddMissingAttrs(order, child)
-        val ordering = newOrder.map(_.asInstanceOf[SortOrder])
-        if (child.output == newChild.output) {
-          s.copy(order = ordering)
-        } else {
-          // Add missing attributes and then project them away.
-          val newSort = s.copy(order = ordering, child = newChild)
-          Project(child.output, newSort)
-        }
+            case s @ Sort(order, _, child)
+            if (!s.resolved || s.missingInput.nonEmpty) && child.resolved =>
+              CustomLogger.logMatchTime("stopTheClock : Match 2 ResolveMissingReferences", true)
+              {
+                val (newOrder, newChild) = resolveExprsAndAddMissingAttrs(order, child)
+                val ordering = newOrder.map(_.asInstanceOf[SortOrder])
+                if (child.output == newChild.output) {
+                  s.copy(order = ordering)
+                } else {
+                  // Add missing attributes and then project them away.
+                  val newSort = s.copy(order = ordering, child = newChild)
+                  Project(child.output, newSort)
+                }
+              }
 
-      case f @ Filter(cond, child) if (!f.resolved || f.missingInput.nonEmpty) && child.resolved =>
-        val (newCond, newChild) = resolveExprsAndAddMissingAttrs(Seq(cond), child)
-        if (child.output == newChild.output) {
-          f.copy(condition = newCond.head)
-        } else {
-          // Add missing attributes and then project them away.
-          val newFilter = Filter(newCond.head, newChild)
-          Project(child.output, newFilter)
-        }
+            case f @ Filter(cond, child) if (
+              !f.resolved || f.missingInput.nonEmpty) && child.resolved =>
+              CustomLogger.logMatchTime("stopTheClock : Match 3 ResolveMissingReferences", true)
+              {
+                val (newCond, newChild) = resolveExprsAndAddMissingAttrs(Seq(cond), child)
+                if (child.output == newChild.output) {
+                  f.copy(condition = newCond.head)
+                } else {
+                  // Add missing attributes and then project them away.
+                  val newFilter = Filter(newCond.head, newChild)
+                  Project(child.output, newFilter)
+                }
+              }
 
-      case r @ RepartitionByExpression(partitionExprs, child, _)
-          if (!r.resolved || r.missingInput.nonEmpty) && child.resolved =>
-        val (newPartitionExprs, newChild) = resolveExprsAndAddMissingAttrs(partitionExprs, child)
-        if (child.output == newChild.output) {
-          r.copy(newPartitionExprs, newChild)
-        } else {
-          Project(child.output, r.copy(newPartitionExprs, newChild))
-        }
-    }
+            case r @ RepartitionByExpression(partitionExprs, child, _)
+            if (!r.resolved || r.missingInput.nonEmpty) && child.resolved =>
+            CustomLogger.logMatchTime("stopTheClock : Match 4 ResolveMissingReferences", true)
+            {
+              val (newPartitionExprs, newChild) = resolveExprsAndAddMissingAttrs(
+                partitionExprs, child)
+              if (child.output == newChild.output) {
+                r.copy(newPartitionExprs, newChild)
+              } else {
+                Project(child.output, r.copy(newPartitionExprs, newChild))
+              }
+            }
+          }
+      }
 
     /**
      * This method tries to resolve expressions and find missing attributes recursively.
@@ -2312,21 +2356,27 @@ class Analyzer(override val catalogManager: CatalogManager)
   object LookupFunctions extends Rule[LogicalPlan] {
     override def apply(plan: LogicalPlan): LogicalPlan = {
       val externalFunctionNameSet = new mutable.HashSet[FunctionIdentifier]()
-      plan.resolveExpressionsWithPruning(_.containsAnyPattern(UNRESOLVED_FUNCTION)) {
-        case f @ UnresolvedFunction(AsFunctionIdentifier(ident), _, _, _, _) =>
-          if (externalFunctionNameSet.contains(normalizeFuncName(ident)) ||
-            v1SessionCatalog.isRegisteredFunction(ident)) {
-            f
-          } else if (v1SessionCatalog.isPersistentFunction(ident)) {
-            externalFunctionNameSet.add(normalizeFuncName(ident))
-            f
-          } else {
-            withPosition(f) {
-              throw new NoSuchFunctionException(
-                ident.database.getOrElse(v1SessionCatalog.getCurrentDatabase),
-                ident.funcName)
+      CustomLogger.logTransformTime("stopTheClock : Transform LookupFunctions")
+      {
+        plan.resolveExpressionsWithPruning(_.containsAnyPattern(UNRESOLVED_FUNCTION)) {
+          case f @ UnresolvedFunction(AsFunctionIdentifier(ident), _, _, _, _) =>
+            CustomLogger.logMatchTime("stopTheClock : Match LookupFunctions", true)
+            {
+              if (externalFunctionNameSet.contains(normalizeFuncName(ident)) ||
+                v1SessionCatalog.isRegisteredFunction(ident)) {
+                  f
+                } else if (v1SessionCatalog.isPersistentFunction(ident)) {
+                  externalFunctionNameSet.add(normalizeFuncName(ident))
+                  f
+                } else {
+                  withPosition(f) {
+                    throw new NoSuchFunctionException(
+                      ident.database.getOrElse(v1SessionCatalog.getCurrentDatabase),
+                      ident.funcName)
+                  }
+                }
             }
-          }
+        }
       }
     }
 
@@ -2356,14 +2406,22 @@ class Analyzer(override val catalogManager: CatalogManager)
    */
   object ResolveFunctions extends Rule[LogicalPlan] {
     val trimWarningEnabled = new AtomicBoolean(true)
-    def apply(plan: LogicalPlan): LogicalPlan = plan.resolveOperatorsUpWithPruning(
+    def apply(plan: LogicalPlan): LogicalPlan =
+      CustomLogger.logTransformTime("stopTheClock : Transform ResolveFunctions")
+      {
+      plan.resolveOperatorsUpWithPruning(
       _.containsAnyPattern(UNRESOLVED_FUNC, UNRESOLVED_FUNCTION, GENERATOR), ruleId) {
       // Resolve functions with concrete relations from v2 catalog.
       case UnresolvedFunc(multipartIdent) =>
-        val funcIdent = parseSessionCatalogFunctionIdentifier(multipartIdent)
-        ResolvedFunc(Identifier.of(funcIdent.database.toArray, funcIdent.funcName))
+        CustomLogger.logMatchTime("stopTheClock : Match 1 ResolveFunctions", true)
+        {
+          val funcIdent = parseSessionCatalogFunctionIdentifier(multipartIdent)
+          ResolvedFunc(Identifier.of(funcIdent.database.toArray, funcIdent.funcName))
+        }
 
       case q: LogicalPlan =>
+        CustomLogger.logMatchTime("stopTheClock : Match 1 ResolveFunctions", true)
+        {
         q.transformExpressionsWithPruning(
           _.containsAnyPattern(UNRESOLVED_FUNCTION, GENERATOR), ruleId) {
           case u if !u.childrenResolved => u // Skip until children are resolved.
@@ -2374,7 +2432,7 @@ class Analyzer(override val catalogManager: CatalogManager)
                 case other => throw QueryCompilationErrors.generatorNotExpectedError(
                   name, other.getClass.getCanonicalName)
               }
-            }
+          }
 
           case u @ UnresolvedFunction(AsFunctionIdentifier(ident), arguments, isDistinct, filter,
             ignoreNulls) => withPosition(u) {
@@ -2498,8 +2556,10 @@ class Analyzer(override val catalogManager: CatalogManager)
                 case _ => u
               }
             }
+          }
         }
     }
+      }
 
     private def processV2ScalarFunction(
         scalarFunc: ScalarFunction[_],
