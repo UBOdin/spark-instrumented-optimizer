@@ -21,6 +21,7 @@ import java.util.Locale
 
 import scala.collection.mutable
 
+import org.apache.spark.sql.catalyst.CustomLogger
 import org.apache.spark.sql.catalyst.expressions.{Expression, UpdateFields, WithField}
 import org.apache.spark.sql.catalyst.plans.logical.LogicalPlan
 import org.apache.spark.sql.catalyst.rules.Rule
@@ -43,45 +44,62 @@ object OptimizeUpdateFields extends Rule[LogicalPlan] {
     case UpdateFields(structExpr, fieldOps)
       if fieldOps.forall(_.isInstanceOf[WithField]) &&
         canOptimize(fieldOps.map(_.asInstanceOf[WithField].name)) =>
-      val caseSensitive = conf.caseSensitiveAnalysis
+          CustomLogger.logMatchTime("stopTheClock : Match 1 OptimizeUpdateFields", true)
+          {
+            val caseSensitive = conf.caseSensitiveAnalysis
 
-      val withFields = fieldOps.map(_.asInstanceOf[WithField])
-      val names = withFields.map(_.name)
-      val values = withFields.map(_.valExpr)
+            val withFields = fieldOps.map(_.asInstanceOf[WithField])
+            val names = withFields.map(_.name)
+            val values = withFields.map(_.valExpr)
 
-      val newNames = mutable.ArrayBuffer.empty[String]
-      val newValues = mutable.HashMap.empty[String, Expression]
-      // Used to remember the casing of the last instance
-      val nameMap = mutable.HashMap.empty[String, String]
+            val newNames = mutable.ArrayBuffer.empty[String]
+            val newValues = mutable.HashMap.empty[String, Expression]
+            // Used to remember the casing of the last instance
+            val nameMap = mutable.HashMap.empty[String, String]
 
-      names.zip(values).foreach { case (name, value) =>
-        val normalizedName = if (caseSensitive) name else name.toLowerCase(Locale.ROOT)
-        if (nameMap.contains(normalizedName)) {
-          newValues += normalizedName -> value
-        } else {
-          newNames += normalizedName
-          newValues += normalizedName -> value
-        }
-        nameMap += normalizedName -> name
-      }
+            names.zip(values).foreach { case (name, value) =>
+              val normalizedName = if (caseSensitive) name else name.toLowerCase(Locale.ROOT)
+              if (nameMap.contains(normalizedName)) {
+                newValues += normalizedName -> value
+              } else {
+                newNames += normalizedName
+                newValues += normalizedName -> value
+              }
+              nameMap += normalizedName -> name
+            }
 
-      val newWithFields = newNames.map(n => WithField(nameMap(n), newValues(n)))
-      UpdateFields(structExpr, newWithFields.toSeq)
+            val newWithFields = newNames.map(n => WithField(nameMap(n), newValues(n)))
+            UpdateFields(structExpr, newWithFields.toSeq)
+          }
 
     case UpdateFields(UpdateFields(struct, fieldOps1), fieldOps2) =>
-      UpdateFields(struct, fieldOps1 ++ fieldOps2)
+      CustomLogger.logMatchTime("stopTheClock : Match 2 OptimizeUpdateFields", true)
+      {
+        UpdateFields(struct, fieldOps1 ++ fieldOps2)
+      }
   }
 
-  def apply(plan: LogicalPlan): LogicalPlan = plan.resolveExpressionsWithPruning(
-    _.containsPattern(UPDATE_FIELDS), ruleId)(optimizeUpdateFields)
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("stopTheClock : Transform OptimizeUpdateFields")
+    {
+      plan.resolveExpressionsWithPruning(
+        _.containsPattern(UPDATE_FIELDS), ruleId)(optimizeUpdateFields)
+    }
 }
 
 /**
  * Replaces [[UpdateFields]] expression with an evaluable expression.
  */
 object ReplaceUpdateFieldsExpression extends Rule[LogicalPlan] {
-  def apply(plan: LogicalPlan): LogicalPlan = plan.transformAllExpressionsWithPruning(
-    _.containsPattern(UPDATE_FIELDS)) {
-    case u: UpdateFields => u.evalExpr
-  }
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("stopTheClock : Transform ReplaceUpdateFieldsExpression")
+    {
+      plan.transformAllExpressionsWithPruning(_.containsPattern(UPDATE_FIELDS)) {
+        case u: UpdateFields =>
+          CustomLogger.logMatchTime("stopTheClock : Match 1 ReplaceUpdateFieldsExpression", true)
+          {
+            u.evalExpr
+          }
+      }
+    }
 }
