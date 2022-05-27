@@ -19,6 +19,7 @@ package org.apache.spark.sql.catalyst.optimizer
 
 import scala.collection.mutable.ArrayBuffer
 
+import org.apache.spark.sql.catalyst.CustomLogger
 import org.apache.spark.sql.catalyst.analysis.EliminateSubqueryAliases
 import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.catalyst.expressions.ScalarSubquery._
@@ -95,10 +96,15 @@ object RewritePredicateSubquery extends Rule[LogicalPlan] with PredicateHelper {
     }
   }
 
-  def apply(plan: LogicalPlan): LogicalPlan = plan.transformWithPruning(
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("stopTheClock : RewritePredicateSubquery")
+    {
+    plan.transformWithPruning(
     t => t.containsAnyPattern(EXISTS_SUBQUERY, LIST_SUBQUERY) && t.containsPattern(FILTER)) {
     case Filter(condition, child)
       if SubqueryExpression.hasInOrCorrelatedExistsSubquery(condition) =>
+        CustomLogger.logMatchTime("stopTheClock : Match 1 RewritePredicateSubquery", true)
+        {
       val (withSubquery, withoutSubquery) =
         splitConjunctivePredicates(condition)
           .partition(SubqueryExpression.hasInOrCorrelatedExistsSubquery)
@@ -153,7 +159,9 @@ object RewritePredicateSubquery extends Rule[LogicalPlan] with PredicateHelper {
           val (newCond, inputPlan) = rewriteExistentialExpr(Seq(predicate), p)
           Project(p.output, Filter(newCond.get, inputPlan))
       }
+        }
   }
+    }
 
   /**
    * Given a predicate expression and an input plan, it rewrites any embedded existential sub-query
@@ -327,9 +335,13 @@ object PullupCorrelatedPredicates extends Rule[LogicalPlan] with PredicateHelper
   /**
    * Pull up the correlated predicates and rewrite all subqueries in an operator tree..
    */
-  def apply(plan: LogicalPlan): LogicalPlan = plan.transformUpWithPruning(
-    _.containsPattern(PLAN_EXPRESSION)) {
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("stopTheClock : Transform PullupCorrelatedPredicates")
+    {
+    plan.transformUpWithPruning(_.containsPattern(PLAN_EXPRESSION)) {
     case j: LateralJoin =>
+      CustomLogger.logMatchTime("stopTheClock : Match 1 PullupCorrelatedPredicates", true)
+      {
       val newPlan = rewriteSubQueries(j)
       // Since a lateral join's output depends on its left child output and its lateral subquery's
       // plan output, we need to trim the domain attributes added to the subquery's plan output
@@ -339,12 +351,20 @@ object PullupCorrelatedPredicates extends Rule[LogicalPlan] with PredicateHelper
       } else {
         newPlan
       }
+      }
     // Only a few unary nodes (Project/Filter/Aggregate) can contain subqueries.
     case q: UnaryNode =>
-      rewriteSubQueries(q)
+      CustomLogger.logMatchTime("stopTheClock : Match 2 PullupCorrelatedPredicates", true)
+      {
+        rewriteSubQueries(q)
+      }
     case s: SupportsSubquery =>
-      rewriteSubQueries(s)
+      CustomLogger.logMatchTime("stopTheClock : Match 3 PullupCorrelatedPredicates", true)
+      {
+        rewriteSubQueries(s)
+      }
   }
+    }
 }
 
 /**
@@ -653,8 +673,13 @@ object RewriteCorrelatedScalarSubquery extends Rule[LogicalPlan] with AliasHelpe
    * Rewrite [[Filter]], [[Project]] and [[Aggregate]] plans containing correlated scalar
    * subqueries.
    */
-  def apply(plan: LogicalPlan): LogicalPlan = plan transformUpWithNewOutput {
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("stopTheClock : Transform RewriteCorrelatedScalarSubquery")
+    {
+    plan transformUpWithNewOutput {
     case a @ Aggregate(grouping, expressions, child) =>
+      CustomLogger.logMatchTime("stopTheClock : Match 1 RewriteCorrelatedScalarSubquery", true)
+      {
       val subqueries = ArrayBuffer.empty[ScalarSubquery]
       val rewriteExprs = expressions.map(extractCorrelatedScalarSubqueries(_, subqueries))
       if (subqueries.nonEmpty) {
@@ -673,7 +698,10 @@ object RewriteCorrelatedScalarSubquery extends Rule[LogicalPlan] with AliasHelpe
       } else {
         a -> Nil
       }
+      }
     case p @ Project(expressions, child) =>
+      CustomLogger.logMatchTime("stopTheClock : Match 2 RewriteCorrelatedScalarSubquery", true)
+      {
       val subqueries = ArrayBuffer.empty[ScalarSubquery]
       val rewriteExprs = expressions.map(extractCorrelatedScalarSubqueries(_, subqueries))
       if (subqueries.nonEmpty) {
@@ -685,7 +713,10 @@ object RewriteCorrelatedScalarSubquery extends Rule[LogicalPlan] with AliasHelpe
       } else {
         p -> Nil
       }
+      }
     case f @ Filter(condition, child) =>
+      CustomLogger.logMatchTime("stopTheClock : Match 3 RewriteCorrelatedScalarSubquery", true)
+      {
       val subqueries = ArrayBuffer.empty[ScalarSubquery]
       val rewriteCondition = extractCorrelatedScalarSubqueries(condition, subqueries)
       if (subqueries.nonEmpty) {
@@ -697,20 +728,29 @@ object RewriteCorrelatedScalarSubquery extends Rule[LogicalPlan] with AliasHelpe
       } else {
         f -> Nil
       }
+      }
   }
+    }
 }
 
 /**
  * This rule rewrites [[LateralSubquery]] expressions into joins.
  */
 object RewriteLateralSubquery extends Rule[LogicalPlan] {
-  def apply(plan: LogicalPlan): LogicalPlan = plan.transformUpWithPruning(
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("stopTheClock : Transform RewriteLateralSubquery")
+    {
+    plan.transformUpWithPruning(
     _.containsPattern(LATERAL_JOIN)) {
     case LateralJoin(left, LateralSubquery(sub, _, _, joinCond), joinType, condition) =>
+      CustomLogger.logMatchTime("stopTheClock : Match 1 RewriteLateralSubquery", true)
+      {
       val newRight = DecorrelateInnerQuery.rewriteDomainJoins(left, sub, joinCond)
       val newCond = (condition ++ joinCond).reduceOption(And)
       Join(left, newRight, joinType, newCond, JoinHint.NONE)
+      }
   }
+    }
 }
 
 /**
@@ -748,11 +788,15 @@ object OptimizeOneRowRelationSubquery extends Rule[LogicalPlan] {
     }
   }
 
-  def apply(plan: LogicalPlan): LogicalPlan = {
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("stopTheClock : Transform OptimizeOneRowRelationSubquery")
+    {
+  {
     if (!conf.getConf(SQLConf.OPTIMIZE_ONE_ROW_RELATION_SUBQUERY)) {
       plan
     } else {
       rewrite(plan)
     }
   }
+    }
 }
