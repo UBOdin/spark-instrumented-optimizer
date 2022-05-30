@@ -20,6 +20,7 @@ package org.apache.spark.sql.catalyst.optimizer
 import scala.collection.immutable.HashSet
 import scala.collection.mutable.{ArrayBuffer, Stack}
 
+import org.apache.spark.sql.catalyst.CustomLogger
 import org.apache.spark.sql.catalyst.analysis._
 import org.apache.spark.sql.catalyst.expressions.{BinaryExpression, MultiLikeBase, _}
 import org.apache.spark.sql.catalyst.expressions.Literal.{FalseLiteral, TrueLiteral}
@@ -52,8 +53,14 @@ object ConstantFolding extends Rule[LogicalPlan] {
     case _ => false
   }
 
-  def apply(plan: LogicalPlan): LogicalPlan = plan.transformWithPruning(AlwaysProcess.fn, ruleId) {
-    case q: LogicalPlan => q.transformExpressionsDownWithPruning(
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("stopTheClock : Transform ConstantFolding")
+    {
+    plan.transformWithPruning(AlwaysProcess.fn, ruleId) {
+    case q: LogicalPlan =>
+      CustomLogger.logMatchTime("stopTheClock : Match 1 ConstantFolding", true)
+      {
+      q.transformExpressionsDownWithPruning(
       AlwaysProcess.fn, ruleId) {
       // Skip redundant folding of literals. This rule is technically not necessary. Placing this
       // here avoids running the next rule for Literal values, which would create a new Literal
@@ -68,7 +75,9 @@ object ConstantFolding extends Rule[LogicalPlan] {
       // Fold expressions that are foldable.
       case e if e.foldable => Literal.create(e.eval(EmptyRow), e.dataType)
     }
+      }
   }
+    }
 }
 
 /**
@@ -86,16 +95,23 @@ object ConstantFolding extends Rule[LogicalPlan] {
  *   in the AND node.
  */
 object ConstantPropagation extends Rule[LogicalPlan] with PredicateHelper {
-  def apply(plan: LogicalPlan): LogicalPlan = plan.transformUpWithPruning(
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("stopTheClock : Transform ConstantPropagation")
+    {
+    plan.transformUpWithPruning(
     _.containsAllPatterns(LITERAL, FILTER), ruleId) {
     case f: Filter =>
+      CustomLogger.logMatchTime("stopTheClock : Match 1 ConstantPropagation", true)
+      {
       val (newCondition, _) = traverse(f.condition, replaceChildren = true, nullIsFalse = true)
       if (newCondition.isDefined) {
         f.copy(condition = newCondition.get)
       } else {
         f
       }
+      }
   }
+    }
 
   type EqualityPredicates = Seq[((AttributeReference, Literal), BinaryComparison)]
 
@@ -214,13 +230,18 @@ object ReorderAssociativeOperator extends Rule[LogicalPlan] {
     case _ => ExpressionSet(Seq.empty)
   }
 
-  def apply(plan: LogicalPlan): LogicalPlan = plan.transformWithPruning(
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("stopTheClock : Transform ReorderAssociativeOperator")
+    {
+    plan.transformWithPruning(
     _.containsPattern(BINARY_ARITHMETIC), ruleId) {
     case q: LogicalPlan =>
       // We have to respect aggregate expressions which exists in grouping expressions when plan
       // is an Aggregate operator, otherwise the optimized expression could not be derived from
       // grouping expressions.
       // TODO: do not reorder consecutive `Add`s or `Multiply`s with different `failOnError` flags
+      CustomLogger.logMatchTime("stopTheClock : Match 1 ReorderAssociativeOperator", true)
+      {
       val groupingExpressionSet = collectGroupingExpressions(q)
       q.transformExpressionsDownWithPruning(_.containsPattern(BINARY_ARITHMETIC)) {
       case a @ Add(_, _, f) if a.deterministic && a.dataType.isInstanceOf[IntegralType] =>
@@ -242,7 +263,9 @@ object ReorderAssociativeOperator extends Rule[LogicalPlan] {
           m
         }
     }
+      }
   }
+    }
 }
 
 
@@ -255,9 +278,15 @@ object ReorderAssociativeOperator extends Rule[LogicalPlan] {
  *    [[InSet (value, HashSet[Literal])]] which is much faster.
  */
 object OptimizeIn extends Rule[LogicalPlan] {
-  def apply(plan: LogicalPlan): LogicalPlan = plan.transformWithPruning(
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("stopTheClock : Transform OptimizeIn")
+    {
+    plan.transformWithPruning(
     _.containsPattern(IN), ruleId) {
-    case q: LogicalPlan => q.transformExpressionsDownWithPruning(_.containsPattern(IN), ruleId) {
+    case q: LogicalPlan =>
+      CustomLogger.logMatchTime("stopTheClock : Match 1 OptimizeIn", true)
+      {
+      q.transformExpressionsDownWithPruning(_.containsPattern(IN), ruleId) {
       case In(v, list) if list.isEmpty =>
         // When v is not nullable, the following expression will be optimized
         // to FalseLiteral which is tested in OptimizeInSuite.scala
@@ -279,7 +308,9 @@ object OptimizeIn extends Rule[LogicalPlan] {
           expr
         }
     }
+      }
   }
+    }
 }
 
 
@@ -291,9 +322,15 @@ object OptimizeIn extends Rule[LogicalPlan] {
  * 4. Removes `Not` operator.
  */
 object BooleanSimplification extends Rule[LogicalPlan] with PredicateHelper {
-  def apply(plan: LogicalPlan): LogicalPlan = plan.transformWithPruning(
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("stopTheClock : Transform BooleanSimplification")
+    {
+    plan.transformWithPruning(
     _.containsAnyPattern(AND_OR, NOT), ruleId) {
-    case q: LogicalPlan => q.transformExpressionsUpWithPruning(
+    case q: LogicalPlan =>
+      CustomLogger.logMatchTime("stopTheClock : Match 1 BooleanSimplification", true)
+      {
+      q.transformExpressionsUpWithPruning(
       _.containsAnyPattern(AND_OR, NOT), ruleId) {
       case TrueLiteral And e => e
       case e And TrueLiteral => e
@@ -443,7 +480,9 @@ object BooleanSimplification extends Rule[LogicalPlan] with PredicateHelper {
       case Not(IsNull(e)) => IsNotNull(e)
       case Not(IsNotNull(e)) => IsNull(e)
     }
+      }
   }
+    }
 }
 
 
@@ -467,9 +506,14 @@ object SimplifyBinaryComparison
     }
   }
 
-  def apply(plan: LogicalPlan): LogicalPlan = plan.transformWithPruning(
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("stopTheClock : Transform SimplifyBinaryComparison")
+    {
+    plan.transformWithPruning(
     _.containsPattern(BINARY_COMPARISON), ruleId) {
     case l: LogicalPlan =>
+      CustomLogger.logMatchTime("stopTheClock : Match 1 SimplifyBinaryComparison", true)
+      {
       lazy val notNullExpressions = ExpressionSet(l match {
         case Filter(fc, _) =>
           splitConjunctivePredicates(fc).collect {
@@ -490,7 +534,9 @@ object SimplifyBinaryComparison
         case a GreaterThan b if canSimplifyComparison(a, b, notNullExpressions) => FalseLiteral
         case a LessThan b if canSimplifyComparison(a, b, notNullExpressions) => FalseLiteral
       }
+      }
   }
+    }
 }
 
 
@@ -504,9 +550,15 @@ object SimplifyConditionals extends Rule[LogicalPlan] with PredicateHelper {
     case _ => false
   }
 
-  def apply(plan: LogicalPlan): LogicalPlan = plan.transformWithPruning(
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("stopTheClock : Transform SimplifyConditionals")
+    {
+    plan.transformWithPruning(
     _.containsAnyPattern(IF, CASE_WHEN), ruleId) {
-    case q: LogicalPlan => q transformExpressionsUp {
+    case q: LogicalPlan =>
+      CustomLogger.logMatchTime("stopTheClock : Match 1 SimplifyConditionals", true)
+      {
+      q transformExpressionsUp {
       case If(TrueLiteral, trueValue, _) => trueValue
       case If(FalseLiteral, _, falseValue) => falseValue
       case If(Literal(null, _), _, falseValue) => falseValue
@@ -575,7 +627,9 @@ object SimplifyConditionals extends Rule[LogicalPlan] with PredicateHelper {
           if elseOpt.exists(_.semanticEquals(Literal(null, e.dataType))) =>
         e.copy(elseValue = None)
     }
+      }
   }
+    }
 }
 
 
@@ -615,9 +669,15 @@ object PushFoldableIntoBranches extends Rule[LogicalPlan] with PredicateHelper {
     case _ => false
   }
 
-  def apply(plan: LogicalPlan): LogicalPlan = plan.transformWithPruning(
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("stopTheClock : Transform PushFoldableIntoBranches")
+    {
+    plan.transformWithPruning(
     _.containsAnyPattern(CASE_WHEN, IF), ruleId) {
-    case q: LogicalPlan => q.transformExpressionsUpWithPruning(
+    case q: LogicalPlan =>
+      CustomLogger.logMatchTime("stopTheClock : Match 1 PushFoldableIntoBranches", true)
+      {
+      q.transformExpressionsUpWithPruning(
       _.containsAnyPattern(CASE_WHEN, IF), ruleId) {
       case u @ UnaryExpression(i @ If(_, trueValue, falseValue))
           if supportedUnaryExpression(u) && atMostOneUnfoldable(Seq(trueValue, falseValue)) =>
@@ -659,7 +719,9 @@ object PushFoldableIntoBranches extends Rule[LogicalPlan] with PredicateHelper {
           branches.map(e => e.copy(_2 = b.withNewChildren(Array(left, e._2)))),
           Some(b.withNewChildren(Array(left, elseValue.getOrElse(Literal(null, c.dataType))))))
     }
+      }
   }
+    }
 }
 
 
@@ -729,20 +791,43 @@ object LikeSimplification extends Rule[LogicalPlan] {
     }
   }
 
-  def apply(plan: LogicalPlan): LogicalPlan = plan.transformAllExpressionsWithPruning(
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("stopTheClock : Transform LikeSimplification")
+    {
+    plan.transformAllExpressionsWithPruning(
     _.containsPattern(LIKE_FAMLIY), ruleId) {
     case l @ Like(input, Literal(pattern, StringType), escapeChar) =>
+      CustomLogger.logMatchTime("stopTheClock : Match 1 LikeSimplification", true)
+      {
       if (pattern == null) {
         // If pattern is null, return null value directly, since "col like null" == null.
         Literal(null, BooleanType)
       } else {
         simplifyLike(input, pattern.toString, escapeChar).getOrElse(l)
       }
-    case l @ LikeAll(child, patterns) => simplifyMultiLike(child, patterns, l)
-    case l @ NotLikeAll(child, patterns) => simplifyMultiLike(child, patterns, l)
-    case l @ LikeAny(child, patterns) => simplifyMultiLike(child, patterns, l)
-    case l @ NotLikeAny(child, patterns) => simplifyMultiLike(child, patterns, l)
+      }
+    case l @ LikeAll(child, patterns) =>
+      CustomLogger.logMatchTime("stopTheClock : Match 2 LikeSimplification", true)
+      {
+        simplifyMultiLike(child, patterns, l)
+      }
+    case l @ NotLikeAll(child, patterns) =>
+      CustomLogger.logMatchTime("stopTheClock : Match 3 LikeSimplification", true)
+      {
+        simplifyMultiLike(child, patterns, l)
+      }
+    case l @ LikeAny(child, patterns) =>
+      CustomLogger.logMatchTime("stopTheClock : Match 4 LikeSimplification", true)
+      {
+        simplifyMultiLike(child, patterns, l)
+      }
+    case l @ NotLikeAny(child, patterns) =>
+      CustomLogger.logMatchTime("stopTheClock : Match 5 LikeSimplification", true)
+      {
+        simplifyMultiLike(child, patterns, l)
+      }
   }
+    }
 }
 
 
@@ -757,10 +842,16 @@ object NullPropagation extends Rule[LogicalPlan] {
     case _ => false
   }
 
-  def apply(plan: LogicalPlan): LogicalPlan = plan.transformWithPruning(
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("stopTheClock : Transform NullPropagation")
+    {
+    plan.transformWithPruning(
     t => t.containsAnyPattern(NULL_CHECK, NULL_LITERAL, COUNT)
       || t.containsAllPatterns(WINDOW_EXPRESSION, CAST, LITERAL), ruleId) {
-    case q: LogicalPlan => q.transformExpressionsUpWithPruning(
+    case q: LogicalPlan =>
+      CustomLogger.logMatchTime("stopTheClock : Match 1 NullPropagation", true)
+      {
+      q.transformExpressionsUpWithPruning(
       t => t.containsAnyPattern(NULL_CHECK, NULL_LITERAL, COUNT)
         || t.containsAllPatterns(WINDOW_EXPRESSION, CAST, LITERAL), ruleId) {
       case e @ WindowExpression(Cast(Literal(0L, _), _, _, _), _) =>
@@ -799,7 +890,9 @@ object NullPropagation extends Rule[LogicalPlan] {
       case e: NullIntolerant if e.children.exists(isNullLiteral) =>
         Literal.create(null, e.dataType)
     }
+      }
   }
+    }
 }
 
 
@@ -818,28 +911,39 @@ object NullPropagation extends Rule[LogicalPlan] {
  */
 object FoldablePropagation extends Rule[LogicalPlan] {
   def apply(plan: LogicalPlan): LogicalPlan = {
-    CleanupAliases(propagateFoldables(plan)._1)
+    CustomLogger.logTransformTime("stopTheClock : Transform FoldablePropagation")
+    {
+      CleanupAliases(propagateFoldables(plan)._1)
+    }
   }
 
   private def propagateFoldables(plan: LogicalPlan): (LogicalPlan, AttributeMap[Alias]) = {
     plan match {
       case p: Project =>
+      CustomLogger.logMatchTime("stopTheClock : Match 1 FoldablePropagation", true)
+      {
         val (newChild, foldableMap) = propagateFoldables(p.child)
         val newProject =
           replaceFoldable(p.withNewChildren(Seq(newChild)).asInstanceOf[Project], foldableMap)
         val newFoldableMap = collectFoldables(newProject.projectList)
         (newProject, newFoldableMap)
+      }
 
       case a: Aggregate =>
+      CustomLogger.logMatchTime("stopTheClock : Match 2 FoldablePropagation", true)
+      {
         val (newChild, foldableMap) = propagateFoldables(a.child)
         val newAggregate =
           replaceFoldable(a.withNewChildren(Seq(newChild)).asInstanceOf[Aggregate], foldableMap)
         val newFoldableMap = collectFoldables(newAggregate.aggregateExpressions)
         (newAggregate, newFoldableMap)
+      }
 
       // We can not replace the attributes in `Expand.output`. If there are other non-leaf
       // operators that have the `output` field, we should put them here too.
       case e: Expand =>
+      CustomLogger.logMatchTime("stopTheClock : Match 3 FoldablePropagation", true)
+      {
         val (newChild, foldableMap) = propagateFoldables(e.child)
         val expandWithNewChildren = e.withNewChildren(Seq(newChild)).asInstanceOf[Expand]
         val newExpand = if (foldableMap.isEmpty) {
@@ -855,11 +959,15 @@ object FoldablePropagation extends Rule[LogicalPlan] {
           }
         }
         (newExpand, foldableMap)
+      }
 
       case u: UnaryNode if canPropagateFoldables(u) =>
+      CustomLogger.logMatchTime("stopTheClock : Match 4 FoldablePropagation", true)
+      {
         val (newChild, foldableMap) = propagateFoldables(u.child)
         val newU = replaceFoldable(u.withNewChildren(Seq(newChild)), foldableMap)
         (newU, foldableMap)
+      }
 
       // Join derives the output attributes from its child while they are actually not the
       // same attributes. For example, the output of outer join is not always picked from its
@@ -868,6 +976,8 @@ object FoldablePropagation extends Rule[LogicalPlan] {
       // TODO(cloud-fan): It seems more reasonable to use new attributes as the output attributes
       // of outer join.
       case j: Join =>
+      CustomLogger.logMatchTime("stopTheClock : Match 5 FoldablePropagation", true)
+      {
         val (newChildren, foldableMaps) = j.children.map(propagateFoldables).unzip
         val foldableMap = AttributeMap(
           foldableMaps.foldLeft(Iterable.empty[(Attribute, Alias)])(_ ++ _.baseMap.values).toSeq)
@@ -884,12 +994,16 @@ object FoldablePropagation extends Rule[LogicalPlan] {
           case (attr, _) => missDerivedAttrsSet.contains(attr)
         }.toSeq)
         (newJoin, newFoldableMap)
+      }
 
       // For other plans, they are not safe to apply foldable propagation, and they should not
       // propagate foldable expressions from children.
       case o =>
+      CustomLogger.logMatchTime("stopTheClock : Match 6 FoldablePropagation", true)
+      {
         val newOther = o.mapChildren(propagateFoldables(_)._1)
         (newOther, AttributeMap.empty)
+      }
     }
   }
 
@@ -938,16 +1052,28 @@ object FoldablePropagation extends Rule[LogicalPlan] {
  * Removes [[Cast Casts]] that are unnecessary because the input is already the correct type.
  */
 object SimplifyCasts extends Rule[LogicalPlan] {
-  def apply(plan: LogicalPlan): LogicalPlan = plan.transformAllExpressionsWithPruning(
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("stopTheClock : Transform SimplifyCasts")
+    {
+    plan.transformAllExpressionsWithPruning(
     _.containsPattern(CAST), ruleId) {
-    case Cast(e, dataType, _, _) if e.dataType == dataType => e
-    case c @ Cast(e, dataType, _, _) => (e.dataType, dataType) match {
+    case Cast(e, dataType, _, _) if e.dataType == dataType =>
+      CustomLogger.logMatchTime("stopTheClock : Match 1 SimplifyCasts", true)
+      {
+        e
+      }
+    case c @ Cast(e, dataType, _, _) =>
+      CustomLogger.logMatchTime("stopTheClock : Match 2 SimplifyCasts", true)
+      {
+      (e.dataType, dataType) match {
       case (ArrayType(from, false), ArrayType(to, true)) if from == to => e
       case (MapType(fromKey, fromValue, false), MapType(toKey, toValue, true))
         if fromKey == toKey && fromValue == toValue => e
       case _ => c
       }
+      }
   }
+    }
 }
 
 
@@ -955,10 +1081,18 @@ object SimplifyCasts extends Rule[LogicalPlan] {
  * Removes nodes that are not necessary.
  */
 object RemoveDispensableExpressions extends Rule[LogicalPlan] {
-  def apply(plan: LogicalPlan): LogicalPlan = plan.transformAllExpressionsWithPruning(
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("stopTheClock : Transform RemoveDispensableExpressions")
+    {
+    plan.transformAllExpressionsWithPruning(
     _.containsPattern(UNARY_POSITIVE), ruleId) {
-    case UnaryPositive(child) => child
+    case UnaryPositive(child) =>
+      CustomLogger.logMatchTime("stopTheClock : Match 1 RemoveDispensableExpressions", true)
+      {
+        child
+      }
   }
+    }
 }
 
 
@@ -967,16 +1101,24 @@ object RemoveDispensableExpressions extends Rule[LogicalPlan] {
  * the inner conversion is overwritten by the outer one.
  */
 object SimplifyCaseConversionExpressions extends Rule[LogicalPlan] {
-  def apply(plan: LogicalPlan): LogicalPlan = plan.transformWithPruning(
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("stopTheClock : Transform SimplifyCaseConversionExpressions")
+    {
+    plan.transformWithPruning(
     _.containsPattern(UPPER_OR_LOWER), ruleId) {
-    case q: LogicalPlan => q.transformExpressionsUpWithPruning(
+    case q: LogicalPlan =>
+      CustomLogger.logMatchTime("stopTheClock : Match 1 SimplifyCaseConversionExpressions", true)
+      {
+      q.transformExpressionsUpWithPruning(
       _.containsPattern(UPPER_OR_LOWER), ruleId) {
       case Upper(Upper(child)) => Upper(child)
       case Upper(Lower(child)) => Upper(child)
       case Lower(Upper(child)) => Lower(child)
       case Lower(Lower(child)) => Lower(child)
     }
+      }
   }
+    }
 }
 
 
@@ -1011,9 +1153,16 @@ object CombineConcats extends Rule[LogicalPlan] {
     case _ => false
   }
 
-  def apply(plan: LogicalPlan): LogicalPlan = plan.transformAllExpressionsWithPruning(
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("stopTheClock : Transform CombineConcats")
+    {
+    plan.transformAllExpressionsWithPruning(
     _.containsPattern(CONCAT), ruleId) {
     case concat: Concat if hasNestedConcats(concat) =>
-      flattenConcats(concat)
+      CustomLogger.logMatchTime("stopTheClock : Match 1 CombineConcats", true)
+      {
+        flattenConcats(concat)
+      }
   }
+    }
 }
