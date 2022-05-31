@@ -140,20 +140,7 @@ object CustomLogger {
     println(s"$descriptor: Total time not accounted for (ApplyTime - TotalRunTime) is $TotalTimeNotAccountedForSec sec")
 
     println("------------------------------")
-    println(s"""$descriptor: Output: {"data":
-    {"runningApplyTimeSec": $runningApplyTimeSec,
-    "execRunningSearchTimeSec": $execRunningSearchTimeSec,
-    "noExecRunningSearchTimeSec": $noExecRunningSearchTimeSec,
-    "runningSearchTimeSec": $runningSearchTimeSec,
-    "execRunningRewriteTimeSec": $execRunningRewriteTimeSec,
-    "runningRewriteTimeEffectiveSec": $runningRewriteTimeEffectiveSec,
-    "runningRewriteTimeInEffectiveSec": $runningRewriteTimeInEffectiveSec,
-    "noExecRunningRewriteTimeSec": $noExecRunningRewriteTimeSec,
-    "runningRewriteTimeSec": $runningRewriteTimeSec,
-    "runningExecutionTimeSec": $runningRewriteTimeSec,
-    "TotalRunTimeSec": $TotalRunTimeSec,
-    "TotalTimeNotAccountedForSec": $TotalTimeNotAccountedForSec
-    }}""")
+    println(s"""$descriptor: Output: {"data":{"runningApplyTimeSec": $runningApplyTimeSec,"execRunningSearchTimeSec": $execRunningSearchTimeSec,"noExecRunningSearchTimeSec": $noExecRunningSearchTimeSec,"runningSearchTimeSec": $runningSearchTimeSec,"execRunningRewriteTimeSec": $execRunningRewriteTimeSec,"runningRewriteTimeEffectiveSec": $runningRewriteTimeEffectiveSec,"runningRewriteTimeInEffectiveSec": $runningRewriteTimeInEffectiveSec,"noExecRunningRewriteTimeSec": $noExecRunningRewriteTimeSec,"runningRewriteTimeSec": $runningRewriteTimeSec,"runningExecutionTimeSec": $runningRewriteTimeSec,"TotalRunTimeSec": $TotalRunTimeSec,"TotalTimeNotAccountedForSec": $TotalTimeNotAccountedForSec}}""")
 
     println("------------------------------")
     // scalastyle:on
