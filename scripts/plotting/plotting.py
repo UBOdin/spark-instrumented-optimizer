@@ -85,7 +85,7 @@ for i in range(1,22):
     ineffective.append(queryDataDict[str(i)]["runningRewriteTimeInEffectiveSec"])
     effective.append(queryDataDict[str(i)]["runningRewriteTimeEffectiveSec"])
     execution.append(queryDataDict[str(i)]["runningExecutionTimeSec"])
-    leftover.append(queryDataDict[str(i)][queryDataDict[str(i)]["TotalTimeNotAccountedForSec"])
+    leftover.append(queryDataDict[str(i)]["TotalTimeNotAccountedForSec"])
 
 # stacked graph generation
 plt.figure(figsize=(10, 6))
