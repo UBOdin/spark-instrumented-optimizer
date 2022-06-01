@@ -111,7 +111,7 @@ object CustomLogger {
     var TotalCalculatedRunTime = runningExecutionTimeSec + noExecRunningSearchTimeSec + execRunningSearchTimeSec +
                                 noExecRunningRewriteTimeSec + runningRewriteTimeEffectiveSec + runningRewriteTimeInEffectiveSec
 
-    var TotalTimeNotAccountedForSec = runningApplyTimeSec - TotalRunTimeSec
+    var TotalTimeNotAccountedForSec = TotalRunTimeSec - runningApplyTimeSec
 
     println("------------------------------") 
     println(s"$descriptor: Total Time For Apply Method Calls $runningApplyTime ns or $runningApplyTimeSec sec")
@@ -140,7 +140,8 @@ object CustomLogger {
     println(s"$descriptor: Total time not accounted for (ApplyTime - TotalRunTime) is $TotalTimeNotAccountedForSec sec")
 
     println("------------------------------")
-    println(s"""$descriptor: Output: {"data":{"runningApplyTimeSec": $runningApplyTimeSec,"execRunningSearchTimeSec": $execRunningSearchTimeSec,"noExecRunningSearchTimeSec": $noExecRunningSearchTimeSec,"runningSearchTimeSec": $runningSearchTimeSec,"execRunningRewriteTimeSec": $execRunningRewriteTimeSec,"runningRewriteTimeEffectiveSec": $runningRewriteTimeEffectiveSec,"runningRewriteTimeInEffectiveSec": $runningRewriteTimeInEffectiveSec,"noExecRunningRewriteTimeSec": $noExecRunningRewriteTimeSec,"runningRewriteTimeSec": $runningRewriteTimeSec,"runningExecutionTimeSec": $runningRewriteTimeSec,"TotalRunTimeSec": $TotalRunTimeSec,"TotalTimeNotAccountedForSec": $TotalTimeNotAccountedForSec}}""")
+    println(s"""$descriptor: Output:""")
+    println(s"""{"data":{"runningApplyTimeSec": $runningApplyTimeSec,"execRunningSearchTimeSec": $execRunningSearchTimeSec,"noExecRunningSearchTimeSec": $noExecRunningSearchTimeSec,"runningSearchTimeSec": $runningSearchTimeSec,"execRunningRewriteTimeSec": $execRunningRewriteTimeSec,"runningRewriteTimeEffectiveSec": $runningRewriteTimeEffectiveSec,"runningRewriteTimeInEffectiveSec": $runningRewriteTimeInEffectiveSec,"noExecRunningRewriteTimeSec": $noExecRunningRewriteTimeSec,"runningRewriteTimeSec": $runningRewriteTimeSec,"runningExecutionTimeSec": $runningRewriteTimeSec,"TotalRunTimeSec": $TotalRunTimeSec,"TotalTimeNotAccountedForSec": $TotalTimeNotAccountedForSec}}""")
 
     println("------------------------------")
     // scalastyle:on
@@ -212,6 +213,11 @@ object CustomLogger {
       {
         val diff = time - mostRecentStamp
         runningApplyTime += diff
+      }
+      else
+      {
+        val stackTop = stateStack.top
+        throw new RuntimeException(s"$stackTop is not implimented!")
       }
     }
     // Comes here regardless of if this is the first call or recursion
