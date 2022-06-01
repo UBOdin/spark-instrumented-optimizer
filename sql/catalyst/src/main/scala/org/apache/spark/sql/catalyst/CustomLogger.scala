@@ -214,11 +214,6 @@ object CustomLogger {
         val diff = time - mostRecentStamp
         runningApplyTime += diff
       }
-      else
-      {
-        val stackTop = stateStack.top
-        throw new RuntimeException(s"$stackTop is not implimented!")
-      }
     }
     // Comes here regardless of if this is the first call or recursion
     // Should this be System.nantom()???
