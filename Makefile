@@ -54,4 +54,4 @@ graph: setup
 	cd ./scripts/plotting/ &&\
 		mkdir output &&\
 		source .venv/bin/activate &&\
-		python3 outputDataPlotting.py
+		python3 plotting.py
