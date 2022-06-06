@@ -19,6 +19,7 @@ package org.apache.spark.sql.catalyst.optimizer
 
 import scala.annotation.tailrec
 
+import org.apache.spark.sql.catalyst.CustomLogger
 import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.catalyst.planning.ExtractFiltersAndInnerJoins
 import org.apache.spark.sql.catalyst.plans._
@@ -90,10 +91,15 @@ object ReorderJoin extends Rule[LogicalPlan] with PredicateHelper {
     }
   }
 
-  def apply(plan: LogicalPlan): LogicalPlan = plan.transformWithPruning(
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("stopTheClock : Transform ReorderJoin")
+    {
+    plan.transformWithPruning(
     _.containsPattern(INNER_LIKE_JOIN), ruleId) {
     case p @ ExtractFiltersAndInnerJoins(input, conditions)
         if input.size > 2 && conditions.nonEmpty =>
+          CustomLogger.logMatchTime("stopTheClock : Match 1 ReorderJoin", true)
+          {
       val reordered = if (conf.starSchemaDetection && !conf.cboEnabled) {
         val starJoinPlan = StarSchemaDetection.reorderStarJoins(input, conditions)
         if (starJoinPlan.nonEmpty) {
@@ -113,7 +119,9 @@ object ReorderJoin extends Rule[LogicalPlan] with PredicateHelper {
         // Inject a projection to make sure we restore to the expected ordering.
         Project(p.output, reordered)
       }
+          }
   }
+    }
 }
 
 /**
@@ -166,25 +174,44 @@ object EliminateOuterJoin extends Rule[LogicalPlan] with PredicateHelper {
     }
   }
 
-  def apply(plan: LogicalPlan): LogicalPlan = plan.transformWithPruning(
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("stopTheClock : Transform EliminateOuterJoin")
+    {
+    plan.transformWithPruning(
     _.containsPattern(OUTER_JOIN), ruleId) {
     case f @ Filter(condition, j @ Join(_, _, RightOuter | LeftOuter | FullOuter, _, _)) =>
+      CustomLogger.logMatchTime("stopTheClock : Match 1 EliminateOuterJoin", true)
+      {
       val newJoinType = buildNewJoinType(f, j)
       if (j.joinType == newJoinType) f else Filter(condition, j.copy(joinType = newJoinType))
+      }
 
     case a @ Aggregate(_, _, Join(left, _, LeftOuter, _, _))
         if a.groupOnly && a.references.subsetOf(AttributeSet(left.output)) =>
-      a.copy(child = left)
+      CustomLogger.logMatchTime("stopTheClock : Match 2 EliminateOuterJoin", true)
+      {
+        a.copy(child = left)
+      }
     case a @ Aggregate(_, _, Join(_, right, RightOuter, _, _))
         if a.groupOnly && a.references.subsetOf(AttributeSet(right.output)) =>
-      a.copy(child = right)
+      CustomLogger.logMatchTime("stopTheClock : Match 3 EliminateOuterJoin", true)
+      {
+        a.copy(child = right)
+      }
     case a @ Aggregate(_, _, p @ Project(_, Join(left, _, LeftOuter, _, _)))
         if a.groupOnly && a.references.subsetOf(AttributeSet(left.output)) =>
-      a.copy(child = p.copy(child = left))
+      CustomLogger.logMatchTime("stopTheClock : Match 4 EliminateOuterJoin", true)
+      {
+        a.copy(child = p.copy(child = left))
+      }
     case a @ Aggregate(_, _, p @ Project(_, Join(_, right, RightOuter, _, _)))
         if a.groupOnly && a.references.subsetOf(AttributeSet(right.output)) =>
-      a.copy(child = p.copy(child = right))
+      CustomLogger.logMatchTime("stopTheClock : Match 5 EliminateOuterJoin", true)
+      {
+        a.copy(child = p.copy(child = right))
+      }
   }
+    }
 }
 
 /**
@@ -200,9 +227,14 @@ object ExtractPythonUDFFromJoinCondition extends Rule[LogicalPlan] with Predicat
     }.isDefined
   }
 
-  override def apply(plan: LogicalPlan): LogicalPlan = plan.transformUpWithPruning(
+  override def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("stopTheClock : Transform ExtractPythonUDFFromJoinCondition")
+    {
+    plan.transformUpWithPruning(
     _.containsAllPatterns(PYTHON_UDF, JOIN)) {
     case j @ Join(_, _, joinType, Some(cond), _) if hasUnevaluablePythonUDF(cond, j) =>
+      CustomLogger.logMatchTime("stopTheClock : Match 1 ExtractPythonUDFFromJoinCondition", true)
+      {
       if (!joinType.isInstanceOf[InnerLike]) {
         // The current strategy supports only InnerLike join because for other types,
         // it breaks SQL semantic if we run the join condition as a filter after join. If we pass
@@ -227,7 +259,9 @@ object ExtractPythonUDFFromJoinCondition extends Rule[LogicalPlan] with Predicat
         case _ =>
           throw QueryCompilationErrors.usePythonUDFInJoinConditionUnsupportedError(joinType)
       }
+      }
   }
+    }
 }
 
 sealed abstract class BuildSide
