@@ -20,6 +20,7 @@ package org.apache.spark.sql.catalyst.optimizer
 import scala.collection.mutable
 
 import org.apache.spark.sql.catalyst.CurrentUserContext.CURRENT_USER
+import org.apache.spark.sql.catalyst.CustomLogger
 import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.catalyst.expressions.aggregate._
 import org.apache.spark.sql.catalyst.plans.logical._
@@ -45,13 +46,33 @@ import org.apache.spark.util.Utils
  * how RuntimeReplaceable does.
  */
 object ReplaceExpressions extends Rule[LogicalPlan] {
-  def apply(plan: LogicalPlan): LogicalPlan = plan.transformAllExpressionsWithPruning(
+  def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("stopTheClock : Transform ReplaceExpressions")
+    {
+    plan.transformAllExpressionsWithPruning(
     _.containsAnyPattern(RUNTIME_REPLACEABLE, COUNT_IF, BOOL_AGG)) {
-    case e: RuntimeReplaceable => e.child
-    case CountIf(predicate) => Count(new NullIf(predicate, Literal.FalseLiteral))
-    case BoolOr(arg) => Max(arg)
-    case BoolAnd(arg) => Min(arg)
+    case e: RuntimeReplaceable =>
+      CustomLogger.logMatchTime("stopTheClock : Match 1 ReplaceExpressions", true)
+      {
+        e.child
+      }
+    case CountIf(predicate) =>
+      CustomLogger.logMatchTime("stopTheClock : Match 2 ReplaceExpressions", true)
+      {
+        Count(new NullIf(predicate, Literal.FalseLiteral))
+      }
+    case BoolOr(arg) =>
+      CustomLogger.logMatchTime("stopTheClock : Match 3 ReplaceExpressions", true)
+      {
+        Max(arg)
+      }
+    case BoolAnd(arg) =>
+      CustomLogger.logMatchTime("stopTheClock : Match 4 ReplaceExpressions", true)
+      {
+        Min(arg)
+      }
   }
+    }
 }
 
 /**
@@ -61,14 +82,21 @@ object ReplaceExpressions extends Rule[LogicalPlan] {
  *   WHERE (SELECT 1 FROM (SELECT A FROM TABLE B WHERE COL1 > 10) LIMIT 1) IS NOT NULL
  */
 object RewriteNonCorrelatedExists extends Rule[LogicalPlan] {
-  override def apply(plan: LogicalPlan): LogicalPlan = plan.transformAllExpressionsWithPruning(
+  override def apply(plan: LogicalPlan): LogicalPlan =
+    CustomLogger.logTransformTime("stopTheClock : Transform RewriteNonCorrelatedExists")
+    {
+    plan.transformAllExpressionsWithPruning(
     _.containsPattern(EXISTS_SUBQUERY)) {
     case exists: Exists if exists.children.isEmpty =>
+      CustomLogger.logMatchTime("stopTheClock : Match 1 RewriteNonCorrelatedExists", true)
+      {
       IsNotNull(
         ScalarSubquery(
           plan = Limit(Literal(1), Project(Seq(Alias(Literal(1), "col")()), exists.plan)),
           exprId = exists.exprId))
+      }
   }
+    }
 }
 
 /**
@@ -82,18 +110,34 @@ object ComputeCurrentTime extends Rule[LogicalPlan] {
     val currentTime = Literal.create(timestamp, timeExpr.dataType)
     val timezone = Literal.create(conf.sessionLocalTimeZone, StringType)
     val localTimestamps = mutable.Map.empty[String, Literal]
-
+    CustomLogger.logTransformTime("stopTheClock : Transform ComputeCurrentTime")
+    {
     plan.transformAllExpressionsWithPruning(_.containsPattern(CURRENT_LIKE)) {
       case currentDate @ CurrentDate(Some(timeZoneId)) =>
+      CustomLogger.logMatchTime("stopTheClock : Match 1 ComputeCurrentTime", true)
+      {
         currentDates.getOrElseUpdate(timeZoneId, {
           Literal.create(currentDate.eval().asInstanceOf[Int], DateType)
         })
-      case CurrentTimestamp() | Now() => currentTime
-      case CurrentTimeZone() => timezone
+      }
+      case CurrentTimestamp() | Now() =>
+      CustomLogger.logMatchTime("stopTheClock : Match 2 ComputeCurrentTime", true)
+      {
+        currentTime
+      }
+      case CurrentTimeZone() =>
+      CustomLogger.logMatchTime("stopTheClock : Match 3 ComputeCurrentTime", true)
+      {
+      timezone
+      }
       case localTimestamp @ LocalTimestamp(Some(timeZoneId)) =>
+      CustomLogger.logMatchTime("stopTheClock : Match 4 ComputeCurrentTime", true)
+      {
         localTimestamps.getOrElseUpdate(timeZoneId, {
           Literal.create(localTimestamp.eval().asInstanceOf[Long], TimestampNTZType)
         })
+      }
+    }
     }
   }
 }
@@ -110,13 +154,25 @@ case class ReplaceCurrentLike(catalogManager: CatalogManager) extends Rule[Logic
     val currentCatalog = catalogManager.currentCatalog.name()
     val currentUser = Option(CURRENT_USER.get()).getOrElse(Utils.getCurrentUserName())
 
+    CustomLogger.logTransformTime("stopTheClock : Transform ReplaceCurrentLike")
+    {
     plan.transformAllExpressionsWithPruning(_.containsPattern(CURRENT_LIKE)) {
       case CurrentDatabase() =>
+      CustomLogger.logMatchTime("stopTheClock : Match 1 ReplaceCurrentLike", true)
+      {
         Literal.create(currentNamespace, StringType)
+      }
       case CurrentCatalog() =>
+      CustomLogger.logMatchTime("stopTheClock : Match 2 ReplaceCurrentLike", true)
+      {
         Literal.create(currentCatalog, StringType)
+      }
       case CurrentUser() =>
+      CustomLogger.logMatchTime("stopTheClock : Match 3 ReplaceCurrentLike", true)
+      {
         Literal.create(currentUser, StringType)
+      }
+    }
     }
   }
 }
@@ -131,13 +187,19 @@ object SpecialDatetimeValues extends Rule[LogicalPlan] {
     TimestampType -> convertSpecialTimestamp,
     TimestampNTZType -> convertSpecialTimestampNTZ)
   def apply(plan: LogicalPlan): LogicalPlan = {
+    CustomLogger.logTransformTime("stopTheClock : Transform SpecialDatetimeValues")
+    {
     plan.transformAllExpressionsWithPruning(_.containsPattern(CAST)) {
       case cast @ Cast(e, dt @ (DateType | TimestampType | TimestampNTZType), _, _)
         if e.foldable && e.dataType == StringType =>
+        CustomLogger.logMatchTime("stopTheClock : Match 1 SpecialDatetimeValues", true)
+        {
         Option(e.eval())
           .flatMap(s => conv(dt)(s.toString, cast.zoneId))
           .map(Literal(_, dt))
           .getOrElse(cast)
+        }
+    }
     }
   }
 }
