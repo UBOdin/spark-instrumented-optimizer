@@ -234,7 +234,7 @@ object CustomLogger
         val transformTime: Long = stateTimes.getOrElse(transformString, -27)
         val matchTime: Long = stateTimes.getOrElse(matchString, -27)
         val effectiveMatchTime: Long = stateTimes.getOrElse(effectiveMatchString, -27)
-        val inefffectiveMatchTime: Long = stateTimes.getOrElse(ineffectiveMatchString, -27)
+        val ineffectiveMatchTime: Long = stateTimes.getOrElse(ineffectiveMatchString, -27)
         val executorTime: Long = stateTimes.getOrElse(executorString, -27)
 
         if (printJSON)
@@ -242,7 +242,7 @@ object CustomLogger
             // scalastyle:off
             print(s"""
 ------------------------------
-{"data":{"applyTime": $applyTime, "transformTime": $transformTime, "matchTime": $matchTime, "effectiveMatchTime": $effectiveMatchTime, "inefffectiveMatchTime: $inefffectiveMatchTime, "executorTime": $executorTime}}
+{"data":{"applyTime": $applyTime, "transformTime": $transformTime, "matchTime": $matchTime, "effectiveMatchTime": $effectiveMatchTime, "ineffectiveMatchTime": $ineffectiveMatchTime, "executorTime": $executorTime}}
 ------------------------------
 """)
             // scalastyle:on
@@ -253,7 +253,7 @@ object CustomLogger
             val applyTimeSec: Double = (applyTime / 1000000000.0)
             val transformTimeSec: Double = (transformTime / 1000000000.0)
             val effectiveMatchTimeSec: Double = (effectiveMatchTime / 1000000000.0)
-            val inefffectiveMatchTimeSec: Double = (inefffectiveMatchTime / 1000000000.0)
+            val ineffectiveMatchTimeSec: Double = (ineffectiveMatchTime / 1000000000.0)
             val matchTimeSec: Double = (matchTime / 1000000000.0)
             val executorTimeSec: Double = (executorTime / 1000000000.0)
 
@@ -275,7 +275,7 @@ Total time for searching: $transformTime ns or $transformTimeSec seconds.
 
 Time for effective rule matching: $effectiveMatchTime ns or $effectiveMatchTimeSec seconds.
 
-Time for ineffective rule matching: $inefffectiveMatchTime ns or $inefffectiveMatchTimeSec seconds.
+Time for ineffective rule matching: $ineffectiveMatchTime ns or $ineffectiveMatchTimeSec seconds.
 
 Total time for rule matching: $matchTime ns or $matchTimeSec seconds.
 
