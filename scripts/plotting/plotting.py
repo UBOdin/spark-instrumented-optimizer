@@ -81,11 +81,11 @@ for rootKey in queryDataDict:
         queryDataDict[rootKey][subKey] = queryDataDict[rootKey][subKey] / numberOfRuns
 for i in range(1,23):
     xAxis.append(("Q" + str(i)))
-    search.append(queryDataDict[str(i)]["runningSearchTimeSec"])
-    ineffective.append(queryDataDict[str(i)]["runningRewriteTimeInEffectiveSec"])
-    effective.append(queryDataDict[str(i)]["runningRewriteTimeEffectiveSec"])
-    execution.append(queryDataDict[str(i)]["runningExecutionTimeSec"])
-    leftover.append(abs(queryDataDict[str(i)]["runningRewriteTimeSec"] - queryDataDict[str(i)]["runningApplyTimeSec"]))
+    search.append(queryDataDict[str(i)]["transformTime"] / 1000000000.0)
+    ineffective.append(queryDataDict[str(i)]["ineffectiveMatchTime"] /1000000000.0)
+    effective.append(queryDataDict[str(i)]["effectiveMatchTime"] / 1000000000.0)
+    execution.append(queryDataDict[str(i)]["executorTime"] / 1000000000.0)
+    leftover.append(abs(queryDataDict[str(i)]["applyTime"] - queryDataDict[str(i)]["transformTime"]) / 1000000000.0)
 
 # stacked graph generation
 plt.figure(figsize=(10, 6))
