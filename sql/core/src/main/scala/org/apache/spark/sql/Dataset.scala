@@ -539,13 +539,13 @@ class Dataset[T] private[sql](
     // `ExplainCommand` here will probably output different query plans, compared to the results
     // of evaluation of the Dataset. So just output QueryExecution's query plans here.
     // scalastyle:off println
-    println("stopTheClock : Using the custom explain without println")
-    queryExecution.explainString(ExplainMode.fromString(mode))
-    CustomLogger.assertNumbers("stopTheClock : Explain assert")
-    CustomLogger.ASTSize("stopTheClock : Explain ", queryExecution.optimizedPlan.map{_ => 1}.sum,
-      queryExecution.analyzed.map{_ => 1}.sum)
-    CustomLogger.printTotalTiming("stopTheClock : Explain ")
-    CustomLogger.printAllRulesSet("stopTheClock : Explain Effective Rules ")
+
+    CustomLogger.printData(true, true, true, true,
+      true,
+      queryExecution.optimizedPlan.map{_ => 1}.sum,
+      queryExecution.analyzed.map{_ => 1}.sum
+      )
+
     println(queryExecution.explainString(ExplainMode.fromString(mode)))
     // scalastyle:on println
   }
@@ -810,10 +810,8 @@ class Dataset[T] private[sql](
   // scalastyle:off println
   def show(numRows: Int, truncate: Boolean): Unit = if (truncate) {
     println(showString(numRows, truncate = 20))
-    CustomLogger.printTotalTiming("stopTheClock : Show ")
   } else {
     println(showString(numRows, truncate = 0))
-    CustomLogger.printTotalTiming("stopTheClock : Show ")
   }
 
   /**

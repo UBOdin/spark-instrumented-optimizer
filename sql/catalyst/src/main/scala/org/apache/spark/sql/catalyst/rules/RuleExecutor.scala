@@ -210,21 +210,18 @@ abstract class RuleExecutor[TreeType <: TreeNode[_]] extends Logging {
         while (continue) {
           curPlan = batch.rules.foldLeft(curPlan) {
             case (plan, rule) =>
-              CustomLogger.logAllRulesAsSet(rule.ruleName)
-              CustomLogger.pushCounterStacks(rule.ruleName)
               val startTime = System.nanoTime()
-
-              CustomLogger.onEnterTime("Apply", System.nanoTime())
-              val result = rule(plan)
-              CustomLogger.onExitTime("Apply", System.nanoTime())
+              CustomLogger.checkMatch("push")
+              val result =
+                CustomLogger.logApplyTime("Logging apply time")
+                {
+                  rule(plan)
+                }
 
               val runTime = System.nanoTime() - startTime
               val effective = !result.fastEquals(plan)
-              CustomLogger.popCounterStacks(effective, rule.ruleName)
+              CustomLogger.checkMatch("pop", rule.ruleName, effective)
               if (effective) {
-                // scalastyle:off
-                CustomLogger.logEffectiveRulesAsSet(rule.ruleName)
-                // scalastyle:on
                 queryExecutionMetrics.incNumEffectiveExecution(rule.ruleName)
                 queryExecutionMetrics.incTimeEffectiveExecutionBy(rule.ruleName, runTime)
                 planChangeLogger.logRule(rule.ruleName, plan, result)
