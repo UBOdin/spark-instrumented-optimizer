@@ -1,4 +1,2 @@
 numpy
-pathlib
 matplotlib
-pandas

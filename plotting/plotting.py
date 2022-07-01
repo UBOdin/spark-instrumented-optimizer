@@ -1,4 +1,5 @@
 from collections import defaultdict
+import time
 import json
 import matplotlib as mpl
 import matplotlib.pyplot as plt
@@ -30,10 +31,10 @@ import re
 #                           #
 #############################
 # where you could have an arbitrary number of sub directories and data files with arbitrary names
-dataOutputDirectory = "./scripts/timing/output/"
+dataOutputDirectory = "../timing/output/"
 
 # graph output directory
-graphOutputDirectory = "./scripts/plotting/output/"
+graphOutputDirectory = "../plotting/output/"
 
 # regular expression string to match the JSON data string
 reDataString = '{"data":\D.*}}'
@@ -45,7 +46,7 @@ reQueryString = r'Query.(?P<number>\d\d|\d)."'
 numberOfRuns = -1
 
 # graph output names
-stackedGraphOutputFile = "stackedGraph.pdf"
+stackedGraphOutputFile = "stackedGraph-" + str(time.strftime("%F__%H_%M_%S")) + ".pdf"
 
 # storage for totals, then the averages of the data from runs
 queryDataDict = defaultdict(dict)

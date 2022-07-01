@@ -6,17 +6,17 @@ trap break INT
 # paths.
 OUTPUT="./output/"
 SHELLCOMMANDS="./shellCommands/"
-SPARKSHELL="../../bin/spark-shell"
+SPARKSHELL="../bin/spark-shell"
 
 RUNS=5
 
 # sanity checks.
 
-if [ -f "../../bin/spark-shell" ]; then
+if [ -f "$SPARKSHELL" ]; then
     echo "spark-shell found!" 
 else
-    echo "spark-shell not found! ../../bin/spark-shell"
-    echo "Please run from the \`scripts/timing\` folder"
+    echo "spark-shell not found! $SPARKSHELL"
+    echo "Please run from the \`./timing\` folder"
     exit 1
 fi
 
@@ -42,3 +42,5 @@ for run in $(seq 1 $RUNS); do
         cat $file | $SPARKSHELL | tee ${OUTPUT}run${run}/$(basename "$file" .scala).txt
     done
 done
+
+tar -cvf output_$(date +%F__%H_%M_%S).tar ./output

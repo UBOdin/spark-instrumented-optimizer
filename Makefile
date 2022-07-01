@@ -2,56 +2,60 @@ SPARKSHELL = bin/spark-shell
 SBT = build/sbt
 SBT_FLAGS = -Pscala-2.13
 
-FLAGS = .flags
-
 .PHONY: cleanbuild cleandata cleanflags cleanvenv cleangraphs cleanall compile interactive data
 
-all: setup compile package data graphs
+all: .compileSetup .package .data graph
 
 cleanbuild:
 	$(SBT) $(SBT_FLAGS) clean
 
 cleandata:
-	rm -rf scripts/timing/output
+	rm -rf ./timing/output
 
 cleanflags:
-	rm -rf .flags/
+	rm -rf .data .package .compileSetup .graphSetup
 
 cleanvenv:
-	rm -rf ./scripts/plotting/.venv/
+	rm -rf ./plotting/.venv/
 
 cleangraphs:
-	rm -rf scripts/plotting/output
+	rm -rf ./plotting/output
 
 cleanall:
 	$(MAKE) cleanflags cleanvenv cleangraphs cleanbuild
 
-$(FLAGS):
-	mkdir $(FLAGS)
-
-$(FLAGS)/setup: | $(FLAGS)
+.compileSetup:
 	./dev/change-scala-version.sh 2.13
-	cd scripts/plotting && python3 -m venv .venv &&\
-		source .venv/bin/activate &&\
-		python3 -m pip install -r requierments.txt
 	touch $@
 
-setup: $(FLAGS)/setup
+.graphSetup:
+	cd ./plotting && python3 -m venv .venv &&\
+		source .venv/bin/activate &&\
+		python3 -m pip install -r requirements.txt
+	touch $@
 
-compile: setup
+compile: .compileSetup
 	$(SBT) $(SBT_FLAGS) compile
 
-package: setup
+.package: .compileSetup
 	$(SBT) $(SBT_FLAGS) package
+	touch $@
 
-interactive: setup
+package:
+	$(MAKE) .package
+
+interactive: .compileSetup
 	$(SBT) $(SBT_FLAGS)
 
-data: setup
-	cd scripts/timing && ./tpchBench.sh
+.data: .package
+	cd ./timing && ./tpchBench.sh
+	touch $@
 
-graph: setup
-	cd ./scripts/plotting/ &&\
-		mkdir output &&\
+data:
+	$(MAKE) .data
+
+graph: .data .graphSetup
+	cd ./plotting/ &&\
+		mkdir -p output &&\
 		source .venv/bin/activate &&\
 		python3 plotting.py

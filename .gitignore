@@ -111,3 +111,15 @@ spark-warehouse/
 
 # For Node.js
 node_modules
+
+# build flags
+.compileSetup
+.package
+.data
+.graphSetup
+
+# output data
+timing/output/*
+timing/*.tar
+plotting/output/*
+plotting/.venv
