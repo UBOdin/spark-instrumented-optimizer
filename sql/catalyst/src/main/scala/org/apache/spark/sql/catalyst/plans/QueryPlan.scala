@@ -20,6 +20,7 @@ package org.apache.spark.sql.catalyst.plans
 import scala.collection.mutable
 
 import org.apache.spark.sql.AnalysisException
+import org.apache.spark.sql.catalyst.CustomLogger
 import org.apache.spark.sql.catalyst.SQLConfHelper
 import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.catalyst.rules.RuleId
@@ -120,7 +121,10 @@ abstract class QueryPlan[PlanType <: QueryPlan[PlanType]]
   def transformExpressionsWithPruning(cond: TreePatternBits => Boolean,
     ruleId: RuleId = UnknownRuleId)(rule: PartialFunction[Expression, Expression])
   : this.type = {
-    transformExpressionsDownWithPruning(cond, ruleId)(rule)
+    CustomLogger.logTransformExpressionTime()
+    {
+      transformExpressionsDownWithPruning(cond, ruleId)(rule)
+    }
   }
 
   /**

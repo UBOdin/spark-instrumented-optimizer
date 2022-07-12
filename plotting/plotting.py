@@ -73,6 +73,7 @@ for root, dirs, files in os.walk(dataOutputDirectory):
 # manipulating data
 xAxis = []
 search = []
+transformExpression = []
 ineffective = []
 effective = []
 execution = []
@@ -83,6 +84,7 @@ for rootKey in queryDataDict:
 for i in range(1,23):
     xAxis.append(("Q" + str(i)))
     search.append(queryDataDict[str(i)]["transformTime"] / 1000000000.0)
+    transformExpression.append(queryDataDict[str(i)]["transformExpressionTime"] / 1000000000.0)
     ineffective.append(queryDataDict[str(i)]["ineffectiveMatchTime"] /1000000000.0)
     effective.append(queryDataDict[str(i)]["effectiveMatchTime"] / 1000000000.0)
     execution.append(queryDataDict[str(i)]["executorTime"] / 1000000000.0)
@@ -97,10 +99,11 @@ plt.ylim(ymin = 0, ymax = 3)
 plt.xlabel('TPC-H Query #')
 plt.ylabel('Total Time Spent Optimizing (sec)')
 plt.bar(xAxis, search, label='Search', color = '#00263E')
-plt.bar(xAxis, ineffective, label='Ineffective Rewrites', color = '#0062A0', bottom = search)
-plt.bar(xAxis, effective, label='Effective Rewrites', color = '#409EDA', bottom = np.array(search) + np.array(ineffective))
-plt.bar(xAxis, execution, label='Fixpoint Loop', color = '#76C8FC', bottom = np.array(search) + np.array(ineffective) + np.array(effective))
-plt.bar(xAxis, leftover, label='Untracked', color = '#7A0097', bottom = np.array(search) + np.array(ineffective) + np.array(effective) + np.array(execution))
+plt.bar(xAxis, transformExpression, label='Expression Transformations', color = '#B09ABA', bottom = search)
+plt.bar(xAxis, ineffective, label='Ineffective Rewrites', color = '#0062A0', bottom = np.array(search) + np.array(transformExpression))
+plt.bar(xAxis, effective, label='Effective Rewrites', color = '#409EDA', bottom = np.array(search) + np.array(transformExpression) + np.array(ineffective))
+plt.bar(xAxis, execution, label='Fixpoint Loop', color = '#76C8FC', bottom = np.array(search) + np.array(transformExpression) + np.array(ineffective) + np.array(effective))
+plt.bar(xAxis, leftover, label='Untracked', color = '#7A0097', bottom = np.array(search) + np.array(transformExpression) + np.array(ineffective) + np.array(effective) + np.array(execution))
 plt.legend(loc="upper left")
 
 plt.savefig(graphOutputDirectory + stackedGraphOutputFile ,bbox_inches='tight')

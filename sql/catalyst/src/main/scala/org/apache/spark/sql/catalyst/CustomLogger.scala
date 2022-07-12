@@ -20,6 +20,10 @@ package org.apache.spark.sql.catalyst
 import scala.collection.mutable.Map
 import scala.collection.mutable.Set
 import scala.collection.mutable.Stack
+import scala.reflect.runtime.universe._
+
+import org.apache.spark.sql.catalyst.expressions.Expression
+import org.apache.spark.sql.catalyst.plans.logical.LogicalPlan
 
 object CustomLogger
 {
@@ -28,6 +32,7 @@ object CustomLogger
 
     val applyString: String = "Apply"
     val transformString: String = "Transform"
+    val transformExpressionString: String = "TransformExpression"
     val matchString: String = "Match"
     val potentialMatchString: String = "Potential Match"
     val effectiveMatchString: String = "Effective Match"
@@ -37,6 +42,7 @@ object CustomLogger
     val stateTimes: Map[String, Long] = Map[String, Long](
         applyString -> 0,
         transformString -> 0,
+        transformExpressionString -> 0,
         matchString -> 0,
         effectiveMatchString -> 0,
         potentialMatchString -> 0,
@@ -44,6 +50,7 @@ object CustomLogger
         executorString -> 0
     )
 
+    var transformExpressionLogState: Boolean = false
     var tempMatchBucket: Long = 0;
     val intermediateStateStack: Stack[String] = Stack[String]()
     var previousTimeStamp: Long = 0
@@ -168,9 +175,9 @@ object CustomLogger
         // scalastyle:on println
     )(anonFunc: => F): F =
     {
-        push("Apply")
+        push(applyString)
         val anonFuncRet = anonFunc
-        pop("Apply")
+        pop(applyString)
         anonFuncRet
     }
 
@@ -183,10 +190,35 @@ object CustomLogger
         // scalastyle:on println
     )(anonFunc: => F): F =
     {
-        push("Transform")
+        transformExpressionLogState = true
+        push(transformString)
         val anonFuncRet = anonFunc
-        pop("Transform")
+        pop(transformString)
+        transformExpressionLogState = false
         anonFuncRet
+    }
+
+    def logTransformExpressionTime[F](
+        descriptor: String = "",
+        context: String = "",
+        log: (String => Unit) =
+        // scalastyle:off println
+        println(_)
+        // scalastyle:on println
+    )(anonFunc: => F): F =
+    {
+        if (transformExpressionLogState)
+        {
+            push(transformExpressionString)
+            val anonFuncRet = anonFunc
+            pop(transformExpressionString)
+            anonFuncRet
+        }
+        else
+        {
+            val anonFuncRet = anonFunc
+            anonFuncRet
+        }
     }
 
     def logMatchTime[F](
@@ -199,9 +231,9 @@ object CustomLogger
         // scalastyle:on println
     )(anonFunc: => F): F =
     {
-        push("Match")
+        push(matchString)
         val anonFuncRet = anonFunc
-        pop("Match")
+        pop(matchString)
         anonFuncRet
     }
 
@@ -214,9 +246,9 @@ object CustomLogger
         // scalastyle:on
     )(anonFunc: => F): F =
     {
-        push("Executor")
+        push(executorString)
         val anonFuncRet = anonFunc
-        pop("Executor")
+        pop(executorString)
         anonFuncRet
     }
 
@@ -232,6 +264,7 @@ object CustomLogger
     {
         val applyTime: Long = stateTimes.getOrElse(applyString, -27)
         val transformTime: Long = stateTimes.getOrElse(transformString, -27)
+        val transformExpressionTime: Long = stateTimes.getOrElse(transformExpressionString, -27)
         val matchTime: Long = stateTimes.getOrElse(matchString, -27)
         val effectiveMatchTime: Long = stateTimes.getOrElse(effectiveMatchString, -27)
         val ineffectiveMatchTime: Long = stateTimes.getOrElse(ineffectiveMatchString, -27)
@@ -242,7 +275,7 @@ object CustomLogger
             // scalastyle:off
             print(s"""
 ------------------------------
-{"data":{"applyTime": $applyTime, "transformTime": $transformTime, "matchTime": $matchTime, "effectiveMatchTime": $effectiveMatchTime, "ineffectiveMatchTime": $ineffectiveMatchTime, "executorTime": $executorTime}}
+{"data":{"applyTime": $applyTime, "transformTime": $transformTime, "transformExpressionTime": $transformExpressionTime, "matchTime": $matchTime, "effectiveMatchTime": $effectiveMatchTime, "ineffectiveMatchTime": $ineffectiveMatchTime, "executorTime": $executorTime}}
 ------------------------------
 """)
             // scalastyle:on
@@ -252,6 +285,7 @@ object CustomLogger
         {
             val applyTimeSec: Double = (applyTime / 1000000000.0)
             val transformTimeSec: Double = (transformTime / 1000000000.0)
+            val transformExpressionTimeSec: Double = (transformExpressionTime / 1000000000.0)
             val effectiveMatchTimeSec: Double = (effectiveMatchTime / 1000000000.0)
             val ineffectiveMatchTimeSec: Double = (ineffectiveMatchTime / 1000000000.0)
             val matchTimeSec: Double = (matchTime / 1000000000.0)
@@ -271,6 +305,8 @@ Total time for applying rules: $applyTime ns or $applyTimeSec seconds.
 
 
 Total time for searching: $transformTime ns or $transformTimeSec seconds.
+
+Total time for expression transformations: $transformExpressionTime ns or $transformExpressionTimeSec seconds.
 
 
 Time for effective rule matching: $effectiveMatchTime ns or $effectiveMatchTimeSec seconds.
